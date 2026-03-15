@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: pc-high-deploy
+  name: pc-high-deploy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pc-high-deploy
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: pc-high-deploy
+    spec:
+      nodeSelector: 
+        kubernetes.io/hostname: k3d-lab-agent-0
+      priorityClassName: high-prio 
+      containers:
+      - image: nginx
+        name: nginx
+        resources:
+          requests:
+            cpu: "6"
+            memory: "200Mi"

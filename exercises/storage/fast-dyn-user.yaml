@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: fast-dyn-user
+  name: fast-dyn-user
+  namespace: cka-storage-7
+spec:
+  volumes:
+  - name: pvc
+    persistentVolumeClaim:
+      claimName: pvc-fast-dyn
+  containers:
+  - image: nginx
+    name: fast-dyn-user
+    command: ['sh','-c','echo "WRITE from pvc-fast-dyn"; echo "dynamic-ok" > /data/dyn.txt; sleep 3600']
+    volumeMounts:
+    - name: pvc
+      mountPath: /data

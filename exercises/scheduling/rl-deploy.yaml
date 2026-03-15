@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: rl-deploy
+  name: rl-deploy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rl-deploy
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: rl-deploy
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+status: {}

@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: sidecar-demo
+  name: sidecar-demo
+spec:
+  volumes:
+  - name: shared
+    emptyDir: {}
+  containers:
+  - image: busybox:1.36
+    name: con1
+    command: ["/bin/sh","-c","while true; do echo `date` >> /data/out.log; sleep 5;done"]
+    volumeMounts:
+    - name: shared
+      mountPath: /data
+  - image: busybox:1.36
+    name: con2
+    command: ["/bin/sh","-c","tail -f /data/out.log;"]
+    volumeMounts:
+    - name: shared
+      mountPath: /data
+    resources: {}
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}

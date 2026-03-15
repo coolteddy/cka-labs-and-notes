@@ -1,0 +1,18 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pi-job
+spec:
+  template:
+    metadata: {}
+    spec:
+      containers:
+      - command:
+        - perl
+        - -e
+        - print 'hello from job'
+        image: perl:5.34
+        name: pi-job
+        resources: {}
+      restartPolicy: Never
+status: {}

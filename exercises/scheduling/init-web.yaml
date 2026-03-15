@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: init-web
+  name: init-web
+spec:
+  volumes:
+  - name: shared
+    emptyDir: {}
+  initContainers:
+  - image: busybox:1.36
+    name: init
+    command: ["/bin/sh", "-c", "echo 'hello from init' > /work/message.txt; sleep 5"]
+    volumeMounts:
+    - name: shared
+      mountPath: /work
+  containers:
+  - image: busybox:1.36
+    name: app
+    command: ["/bin/sh", "-c", "echo 'hello from main'; cat /work/message.txt; sleep 180"]
+    volumeMounts:
+    - name: shared
+      mountPath: /work
+    resources: {}
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}

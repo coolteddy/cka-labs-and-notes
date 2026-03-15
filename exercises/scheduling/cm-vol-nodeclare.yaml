@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: cm-vol-no-pod
+  name: cm-vol-no-pod
+spec:
+  containers:
+  - image: nginx
+    name: cm-vol-no-pod
+    volumeMounts:
+    - name: app
+      mountPath: "/etc/settings"
+  volumes:
+  - name: app
+    configMap:
+      name: app-config

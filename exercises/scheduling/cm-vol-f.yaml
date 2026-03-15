@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: cm-vol-file-pod
+  name: cm-vol-file-pod
+spec:
+  containers:
+  - image: nginx
+    name: cm-vol-file-pod
+    volumeMounts:
+    - name: app
+      mountPath: /etc/settings
+      readOnly: true
+  volumes:
+  - name: app
+    configMap:
+      name: app-file-config
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}

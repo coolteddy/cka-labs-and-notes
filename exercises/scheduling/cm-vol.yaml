@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: cm-vol-pod
+  name: cm-vol-pod
+spec:
+  containers:
+  - image: nginx
+    name: cm-vol-pod
+    volumeMounts:
+    - name: app
+      mountPath: "/etc/settings"
+  volumes:
+  - name: app
+    configMap:
+      name: app-config
+      items:
+      - key: APP_ENV
+        path: env.text
+      - key: LOG_LEVEL
+        path: log.config
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}

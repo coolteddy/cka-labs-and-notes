@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: cm-pod
+  name: cm-pod
+spec:
+  containers:
+  - image: nginx
+    name: cm-pod
+    env:
+      - name: APP_ENV
+        valueFrom:
+          configMapKeyRef:
+            name: app-config
+            key: APP_ENV
+      - name: LOG_LEVEL
+        valueFrom:
+          configMapKeyRef:
+            name: app-config
+            key: LOG_LEVEL
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}

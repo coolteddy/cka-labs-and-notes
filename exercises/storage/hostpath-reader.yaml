@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: hostpath-reader
+  name: hostpath-reader
+  namespace: cka-storage-2
+spec:
+  volumes:
+  - name: host
+    hostPath: 
+      path: /data/test
+      type: DirectoryOrCreate
+  containers:
+  - image: nginx
+    name: hostpath-reader
+    command: ['sh','-c','cat /hostdata/node-file.txt; sleep 3600']
+    volumeMounts:
+    - name: host
+      mountPath: /hostdata

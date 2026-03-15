@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: fast-user
+  name: fast-user
+  namespace: cka-storage-7
+spec:
+  volumes:
+  - name: pvc
+    persistentVolumeClaim:
+      claimName: pvc-fast-1
+  containers:
+  - image: nginx
+    name: fast-user
+    command: ['sh','-c','echo "WRITE from fast-user"; echo "fast-path-ok" > /cache/check.txt; sleep 3600']
+    volumeMounts:
+    - name: pvc
+      mountPath: /cache

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: ssd-pod
+  name: ssd-pod
+spec:
+  containers:
+  - image: nginx
+    name: ssd-pod
+    resources: {}
+  nodeSelector:
+    disk: ssd
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}

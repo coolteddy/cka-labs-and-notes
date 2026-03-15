@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: rq-test
+  namespace: rq
+spec:
+  hard:
+    limits.cpu: "500m"
+    limits.memory: "512Mi"

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: teama-pod
+  name: teama-pod
+spec:
+  containers:
+  - image: nginx
+    name: teama-pod
+  tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "teamA"
+    effect: "NoSchedule"

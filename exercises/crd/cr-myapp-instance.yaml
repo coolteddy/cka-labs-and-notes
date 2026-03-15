@@ -1,0 +1,9 @@
+apiVersion: cka.example.com/v1     # group/version from CRD
+kind: MyApp                        # kind from CRD
+metadata:
+  name: my-first-app
+  namespace: default
+spec:
+  image: nginx:1.25
+  replicas: 3
+  environment: dev

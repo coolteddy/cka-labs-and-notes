@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: shared-data
+  name: shared-data
+  namespace: cka-storage-1
+spec:
+  volumes:
+    - name: shared 
+      emptyDir: {}
+  containers:
+  - image: nginx
+    name: con-a
+    command: ['sh','-c','echo "fron container a"; while true; do echo "`date`" >> /data/out.txt;sleep 5;done']
+    volumeMounts:
+    - name: shared
+      mountPath: /data
+  - image: nginx
+    name: con-b
+    command: ['sh','-c','echo "from container b"; tail -n +1 -f /data/out.txt']
+    volumeMounts:
+    - name: shared
+      mountPath: /data
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}

@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: probe-web
+  name: probe-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: probe-web
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: probe-web
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 10
+status: {}

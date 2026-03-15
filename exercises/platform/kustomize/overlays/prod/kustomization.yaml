@@ -1,0 +1,14 @@
+resources:
+  - ../../base
+namePrefix: prod-
+namespace: prod
+Labels:
+  - pairs:
+      env: prod
+      team: platform
+images:
+  - name: nginx
+    newTag: 1.29.5
+replicas:
+  - name: app
+    count: 3
