@@ -3,6 +3,7 @@
 This folder contains topic notes for CKA study in Markdown format.
 
 Files:
+- `cka-helm-notes.md`
 - `cka-workload-scheduling-notes.md`
 - `cka-storage-notes.md`
 - `cka-networking-notes.md`
