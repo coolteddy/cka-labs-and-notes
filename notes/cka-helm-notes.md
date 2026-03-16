@@ -211,6 +211,11 @@ Important distinction:
 
 - They can produce similar outcomes.
 - They are not the same mechanism.
+- Ideal habit:
+  - first check `helm show values <chart> | grep -i crd`
+  - then check `helm show crds <chart>`
+  - prefer the chart's own CRD control value if it exists
+  - use `--skip-crds` as a fallback when the chart does not expose a value
 
 ## Gotchas
 
@@ -221,6 +226,9 @@ Important distinction:
 - A typo like `replicCount=2` can be accepted and silently do nothing.
 - `helm upgrade` can unintentionally drop earlier values if you do not restate them.
 - Verify with `helm get values` after install or upgrade.
+- For CRD-sensitive charts, do not jump straight to `--skip-crds`.
+- First inspect `values.yaml` for chart-defined CRD controls such as `crds.install`, `installCRDs`, or `crds.enabled`.
+- If the chart exposes a CRD value, prefer that over the generic Helm flag.
 - `helm template` does not need the namespace to already exist.
 - Redirecting to `/home/file.yaml` can fail for a normal user. Use `~/file.yaml` or `/home/<user>/file.yaml`.
 
