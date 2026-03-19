@@ -9,6 +9,7 @@ This folder groups hands-on CKA practice files by topic.
 - `services/`: service manifests and exposure exercises
 - `crd/`: CRD and custom resource examples
 - `networking/`: CNI, ingress, gateway, and related networking practice
+- `networking/cka/`: CKA-focused networking drills for services, DNS, network policy, ingress, gateway API, and troubleshooting
 - `platform/`: Helm and Kustomize exercises
 - `scratch/`: one-off or unclassified files kept for reference
 

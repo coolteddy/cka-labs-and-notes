@@ -2,13 +2,11 @@
 
 ## Cluster Reality
 
-- This k3d cluster is using Flannel with `vxlan`.
-- CoreDNS is running as `kube-dns` in `kube-system`.
-- Available ingress classes are `traefik` and `nginx`.
+- This lab cluster is kubeadm-based with Calico, so `NetworkPolicy` is enforced.
+- CoreDNS is exposed by the `kube-dns` Service in `kube-system`.
 - `ingress-nginx` is installed as a `NodePort` Service.
-- Default k3s `traefik` is also running as a `LoadBalancer` Service.
-- Calico is not installed on this cluster.
-- NetworkPolicy YAML can be created here, but traffic enforcement needs a policy-capable CNI such as Calico or Cilium.
+- Gateway API CRDs are installed.
+- NGINX Gateway Fabric is installed and provides `GatewayClass` `nginx`.
 
 ## Fast Commands
 
@@ -16,113 +14,164 @@
   - `kubectl get svc,endpoints,endpointslices -A`
 - Describe a Service:
   - `kubectl describe svc <name> -n <ns>`
-- Check Service selectors:
-  - `kubectl get svc <name> -n <ns> -o yaml`
 - Check Pod labels:
   - `kubectl get pod -n <ns> --show-labels`
+- Check Service selectors:
+  - `kubectl get svc <name> -n <ns> -o yaml`
 - DNS test from a Pod:
-  - `kubectl exec -it -n <ns> <pod> -- nslookup <svc>`
+  - `kubectl exec <pod> -n <ns> -- nslookup <svc>`
 - HTTP test from a Pod:
-  - `kubectl exec -it -n <ns> <pod> -- wget -qO- http://<svc>:<port>`
-- Ingresses and classes:
-  - `kubectl get ingress,ingressclass -A`
+  - `kubectl exec <pod> -n <ns> -- wget -qO- http://<svc>:<port>`
+- HTTP test with timeout:
+  - `kubectl exec <pod> -n <ns> -- wget -qO- --timeout=3 http://<svc>:<port>`
+- TCP test with timeout:
+  - `kubectl exec <pod> -n <ns> -- nc -vz -w 3 <svc> <port>`
+- Ingress and class:
+  - `kubectl get ing,ingressclass -A`
 - Describe an Ingress:
-  - `kubectl describe ingress <name> -n <ns>`
+  - `kubectl describe ing <name> -n <ns>`
+- Gateway API objects:
+  - `kubectl get gatewayclass,gateway,httproute -A`
+- Describe a Gateway:
+  - `kubectl describe gateway <name> -n <ns>`
+- Describe an HTTPRoute:
+  - `kubectl describe httproute <name> -n <ns>`
 - Network policies:
   - `kubectl get netpol -A`
-- Controller logs:
-  - `kubectl logs -n ingress-nginx deploy/ingress-nginx-controller`
 
 ## Services
 
-- A Service provides stable virtual IPs and DNS names for a changing set of Pods.
-- Service selectors match Pod labels and build `Endpoints` or `EndpointSlices`.
-- If a Service has no endpoints, traffic will fail even if the Service object exists.
-
-Common types:
-
-- `ClusterIP`: reachable only inside the cluster.
-- `NodePort`: exposes the Service on each node IP and port.
-- `LoadBalancer`: asks a controller to expose the Service externally.
-- `ExternalName`: returns a DNS CNAME and does not create endpoints.
+- A Service gives a stable virtual IP and DNS name to a set of Pods.
+- Service selectors match Pod labels and create endpoints.
+- If the Service exists but has no endpoints, traffic will fail.
 
 Important fields:
 
-- `port`: the port exposed by the Service.
-- `targetPort`: the Pod container port the Service forwards to.
-- `nodePort`: fixed external port for `NodePort` or `LoadBalancer`.
-- `selector`: labels used to find backend Pods.
+- `port`: port exposed by the Service
+- `targetPort`: port on the Pod the Service forwards to
+- `selector`: labels used to find backend Pods
+- `type`: `ClusterIP`, `NodePort`, or `LoadBalancer`
 
-Trouble patterns:
+Common mistakes:
 
 - wrong `selector`
 - wrong `targetPort`
-- Pods not `Ready`, so endpoints are empty
-- app listens on a different container port than expected
+- Pods not ready, so endpoints are empty
+- app listens on a different port than expected
 
 ## DNS
 
 - CoreDNS resolves Service names inside the cluster.
-- Short names work inside the same namespace: `web`
-- Cross-namespace form: `web.demo`
-- Full form: `web.demo.svc.cluster.local`
+- Same-namespace short name: `web-svc`
+- Cross-namespace short form: `web-svc.demo`
+- Full name: `web-svc.demo.svc.cluster.local`
 
-Useful rules:
+Useful checks:
 
-- Pods get `/etc/resolv.conf` search domains for their namespace and cluster domain.
-- Service DNS points to the Service IP, not directly to Pod IPs.
-- Headless Services return Pod IPs instead of a virtual Service IP.
+- `kubectl exec <pod> -n <ns> -- nslookup <svc>`
+- `kubectl exec <pod> -n <ns> -- nslookup <svc>.<ns>.svc.cluster.local`
+- `kubectl get svc -n kube-system -l k8s-app=kube-dns`
+- `kubectl get po -n kube-system -l k8s-app=kube-dns`
 
-Fast checks:
+BusyBox note:
 
-- `nslookup web`
-- `nslookup web.demo.svc.cluster.local`
-- `wget -qO- http://web`
-- `kubectl get svc -n demo`
+- BusyBox `nslookup` can print the correct answer and still show extra `NXDOMAIN` lines for additional search-domain attempts.
+- If the correct FQDN and ClusterIP are shown, DNS resolution is usually fine.
 
 ## NetworkPolicy
 
-- NetworkPolicy controls allowed traffic for selected Pods.
-- Policies are additive allow rules, not ordered deny rules.
-- Once a Pod is selected by an ingress or egress policy, that direction becomes restricted to what is explicitly allowed.
+- A NetworkPolicy controls allowed traffic for selected Pods.
+- Once a Pod is selected for ingress or egress, that direction becomes restricted to what is explicitly allowed.
+- Policies are additive allow rules.
 
-Key selectors:
+Selector behavior:
 
-- `podSelector`: select Pods in the same namespace
-- `namespaceSelector`: select namespaces by label
-- `ipBlock`: allow CIDRs
+- `podSelector` matches Pods in the same namespace
+- `namespaceSelector` matches namespaces by label
+- `ipBlock` matches CIDRs
 
-Important behavior:
+Logic:
 
-- Empty `podSelector: {}` means "all Pods in this namespace".
-- `policyTypes` can include `Ingress`, `Egress`, or both.
-- DNS often breaks after egress lockdown unless you explicitly allow access to DNS.
+- `from` and `ports` in the same ingress rule are `AND`
+- multiple entries under `from` are `OR`
+- multiple entries under `ports` are `OR`
+- multiple ingress rules are `OR`
 
-Cluster caveat:
+Useful checks:
 
-- On this Flannel-based k3d cluster, NetworkPolicy manifests can be created and inspected.
-- Actual traffic blocking will not be enforced unless you install a policy-capable CNI.
+- `kubectl get pod -n <ns> --show-labels`
+- `kubectl get netpol -n <ns>`
+- `kubectl describe netpol <name> -n <ns>`
+- `kubectl exec <pod> -n <ns> -- wget -qO- --timeout=3 http://<svc>:<port>`
+- `kubectl exec <pod> -n <ns> -- nc -vz -w 3 <svc> <port>`
+
+Failure hints:
+
+- timeout often suggests `NetworkPolicy`, routing, or unreachable backend
+- `connection refused` often suggests wrong `targetPort` or app not listening
 
 ## Ingress
 
-- Ingress routes HTTP and HTTPS traffic to Services.
-- An Ingress resource does nothing by itself without an Ingress controller.
-- This cluster has two controllers, so set `ingressClassName` explicitly.
+- An Ingress resource needs an Ingress controller.
+- In this lab, use `ingressClassName: nginx`.
+- An Ingress points to a Service, not directly to Pods.
 
 Important fields:
 
-- `ingressClassName`: choose `nginx` or `traefik`
-- `rules[].host`: optional host match
-- `rules[].http.paths[].path`: URL path match
-- backend `service.name` and `service.port`
+- `ingressClassName`
+- `rules[].host`
+- `rules[].http.paths[].path`
+- `pathType`
+- backend Service name and port
 
-Common mistakes:
+Useful checks:
 
-- missing or wrong `ingressClassName`
-- backend Service name typo
-- wrong backend Service port
-- host header does not match
-- controller is healthy, but Service has no endpoints
+- `kubectl get ing -n <ns>`
+- `kubectl describe ing <name> -n <ns>`
+- `kubectl get svc -n ingress-nginx`
+- `kubectl get po -n ingress-nginx`
+- `kubectl logs -n ingress-nginx deploy/ingress-nginx-controller`
+
+Route tests:
+
+- `curl -H 'Host: <host>' http://127.0.0.1:<nodeport>`
+- `wget -qO- --header='Host: <host>' http://127.0.0.1:<nodeport>`
+
+Good signs in `describe ing`:
+
+- correct `Ingress Class`
+- controller sync events from `nginx-ingress-controller`
+- backend Service and endpoint IPs are listed
+
+## Gateway API
+
+- Gateway API needs both CRDs and a real controller implementation.
+- In this lab, NGINX Gateway Fabric provides `GatewayClass` `nginx`.
+- `GatewayClass` selects the controller.
+- `Gateway` creates the listener and data plane.
+- `HTTPRoute` attaches rules to the Gateway.
+
+Useful checks:
+
+- `kubectl get gatewayclass`
+- `kubectl get gateway,httproute -n <ns>`
+- `kubectl describe gateway <name> -n <ns>`
+- `kubectl describe httproute <name> -n <ns>`
+- `kubectl get svc -n <ns>`
+- `curl -H 'Host: <host>' http://127.0.0.1:<nodeport>`
+
+Good signs:
+
+- `GatewayClass` `Accepted=True`
+- `Gateway` `Accepted=True`
+- `Gateway` `Programmed=True`
+- `Attached Routes` is non-zero
+- `HTTPRoute` `Accepted=True`
+- `HTTPRoute` `ResolvedRefs=True`
+
+Controller-specific note:
+
+- NGINX Gateway Fabric creates a data-plane Deployment and Service for the Gateway in the same namespace.
 
 ## Troubleshooting Flow
 
@@ -132,43 +181,67 @@ When traffic fails, check in this order:
 2. Does the Service selector match the Pod labels
 3. Does the Service have endpoints
 4. Does DNS resolve the Service name
-5. Is the app listening on the expected port
-6. Is an Ingress pointing to the right Service and port
-7. Is the correct Ingress controller watching that Ingress
-8. Is a NetworkPolicy expected to matter, and does the cluster CNI actually enforce it
+5. Is the Service forwarding to the right `targetPort`
+6. Is a `NetworkPolicy` blocking traffic
+7. If using Ingress, is the correct host, class, path, and backend set
+8. If using Gateway API, is the `Gateway` programmed and the `HTTPRoute` attached
 
 High-value commands:
 
-- `kubectl get pod,svc,endpoints -n <ns> -o wide`
+- `kubectl get deploy,po,svc,endpoints -n <ns>`
 - `kubectl describe svc <name> -n <ns>`
-- `kubectl describe ingress <name> -n <ns>`
-- `kubectl exec -it -n <ns> <pod> -- nslookup <svc>`
-- `kubectl exec -it -n <ns> <pod> -- wget -S -O- http://<svc>:<port>`
-- `kubectl logs -n ingress-nginx deploy/ingress-nginx-controller`
-
-Common failure signals:
-
-- `Endpoints: <none>`: selector mismatch or Pods not ready
-- `connection refused`: app is not listening on `targetPort`
-- `no such host`: DNS name wrong or object missing
-- Ingress exists but no routing: wrong class, host, path, or Service backend
+- `kubectl get pod -n <ns> --show-labels`
+- `kubectl exec <pod> -n <ns> -- nslookup <svc>`
+- `kubectl exec <pod> -n <ns> -- wget -qO- --timeout=3 http://<svc>:<port>`
+- `kubectl exec <pod> -n <ns> -- nc -vz -w 3 <svc> <port>`
+- `kubectl describe netpol <name> -n <ns>`
+- `kubectl describe ing <name> -n <ns>`
+- `kubectl describe gateway <name> -n <ns>`
+- `kubectl describe httproute <name> -n <ns>`
 
 ## Cheat Sheet
 
-- Service failing: check `selector`, `targetPort`, endpoints, Pod readiness
-- DNS failing: check `kube-dns`, Service name, namespace, and FQDN
-- Use `kubectl get svc,endpoints,endpointslices -A`
-- Use `kubectl exec ... -- nslookup <svc>` for proof
-- Ingress needs a controller and the right `ingressClassName`
-- This cluster has both `traefik` and `nginx`, so always specify the class
-- NetworkPolicy syntax is still exam-relevant even if this cluster does not enforce it
-- For real NetworkPolicy blocking tests, install Calico or Cilium
+- Service failure:
+  - `kubectl get svc,endpoints -n <ns>`
+  - `kubectl describe svc <name> -n <ns>`
+  - `kubectl get pod -n <ns> --show-labels`
+- DNS proof:
+  - `kubectl exec <pod> -n <ns> -- nslookup <svc>`
+  - `kubectl exec <pod> -n <ns> -- nslookup <svc>.<ns>.svc.cluster.local`
+  - `kubectl get svc -n kube-system -l k8s-app=kube-dns`
+  - `kubectl get po -n kube-system -l k8s-app=kube-dns`
+- HTTP proof:
+  - `kubectl exec <pod> -n <ns> -- wget -qO- http://<svc>:<port>`
+  - `kubectl exec <pod> -n <ns> -- wget -qO- --timeout=3 http://<svc>:<port>`
+  - `kubectl exec <pod> -n <ns> -- nc -vz -w 3 <svc> <port>`
+- NetworkPolicy proof:
+  - `kubectl get netpol -n <ns>`
+  - `kubectl describe netpol <name> -n <ns>`
+  - `kubectl get pod -n <ns> --show-labels`
+- Ingress proof:
+  - `kubectl describe ing <name> -n <ns>`
+  - `kubectl get svc -n ingress-nginx`
+  - `curl -H 'Host: <host>' http://127.0.0.1:<nodeport>`
+- Gateway API proof:
+  - `kubectl get gatewayclass`
+  - `kubectl describe gateway <name> -n <ns>`
+  - `kubectl describe httproute <name> -n <ns>`
+  - `curl -H 'Host: <host>' http://127.0.0.1:<nodeport>`
+- Failure hints:
+  - `Endpoints: <none>`: selector mismatch or Pods not ready
+  - `connection refused`: wrong `targetPort` or app not listening
+  - timeout: policy, routing, or unreachable backend
+  - route object exists but no traffic: wrong host, class, path, or backend
 
 ## Exam Habits
 
-- Scope every command with `-n <namespace>`.
-- Verify Services with both `get` and `describe`.
-- Always inspect endpoints when a Service does not work.
-- Test from inside the cluster before testing from outside.
-- On clusters with multiple ingress controllers, never rely on defaults.
-- For NetworkPolicy, first confirm whether the cluster CNI actually enforces policies.
+- Set the namespace at the start of each task:
+  - `kubectl config set-context --current --namespace=<ns>`
+- Verify with `get` and `describe`, not just one of them.
+- Prefer explicit resource lists over `kubectl get all`.
+- Test from inside the cluster before testing from outside when possible.
+- In troubleshooting, keep a short pattern:
+  1. one failing command
+  2. two or three inspection commands
+  3. one minimal fix
+  4. one success command

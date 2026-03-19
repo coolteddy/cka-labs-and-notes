@@ -7,6 +7,7 @@ Files:
 - `cka-workload-scheduling-notes.md`
 - `cka-storage-notes.md`
 - `cka-networking-notes.md`
+- `cka-networking-cheatsheet.md`
 
 Recommended flow:
 1. Open this workspace folder as an Obsidian vault.
