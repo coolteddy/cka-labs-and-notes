@@ -6,6 +6,7 @@ Files:
 - `cka-cluster-installation-cheatsheet.md`
 - `cka-cluster-architecture-cheatsheet.md`
 - `cka-helm-notes.md`
+- `cka-shell-vi-tips.md`
 - `cka-workload-scheduling-notes.md`
 - `cka-storage-notes.md`
 - `cka-networking-notes.md`

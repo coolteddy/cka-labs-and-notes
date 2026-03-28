@@ -50,6 +50,7 @@ Open the repo and work through the notes and exercises by topic. For realistic p
 
 Current note sets:
 
+- [notes/cka-shell-vi-tips.md](notes/cka-shell-vi-tips.md)
 - [notes/cka-workload-scheduling-notes.md](notes/cka-workload-scheduling-notes.md)
 - [notes/cka-storage-notes.md](notes/cka-storage-notes.md)
 - [notes/cka-networking-notes.md](notes/cka-networking-notes.md)
