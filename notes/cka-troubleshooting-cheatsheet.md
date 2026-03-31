@@ -76,6 +76,26 @@ journalctl -u kubelet -n 50         # node-level logs
 
 ---
 
+## kubectl describe node — Useful grep Keywords
+
+```bash
+kubectl describe node <name> | grep -i condition     # Ready, DiskPressure, MemoryPressure, PIDPressure
+kubectl describe node <name> | grep -i taint         # taints applied to node
+kubectl describe node <name> | grep -i unschedulable # cordoned?
+kubectl describe node <name> | grep -A5 "Allocated"  # CPU/memory used vs allocatable
+kubectl describe node <name> | grep -A5 "Capacity"   # total CPU/memory/pods capacity
+kubectl describe node <name> | grep -i kubelet       # kubelet version
+kubectl describe node <name> | grep -i event         # recent events
+kubectl describe node <name> | grep -i pressure      # DiskPressure, MemoryPressure, PIDPressure
+```
+
+Quick combined check:
+```bash
+kubectl describe node <name> | grep -E "Taint|Condition|Pressure|Unschedulable|Allocated"
+```
+
+---
+
 ## 1. Node NotReady
 
 ### Diagnosis
@@ -107,7 +127,76 @@ journalctl -u kubelet -n 100 | grep -i error  # filter errors
 
 ---
 
-## 2. Pod Not Running
+## 2. DiskPressure
+
+### What it is
+When disk usage crosses a threshold, kubelet sets `DiskPressure=True` on the node and automatically adds a taint:
+```
+node.kubernetes.io/disk-pressure:NoSchedule
+```
+No new pods are scheduled on the node until resolved.
+
+### Diagnosis
+```bash
+kubectl describe node <name> | grep -E "DiskPressure|Taint"
+
+# On the node:
+df -h                            # overall disk usage per partition
+du -sh /var/lib/containerd/      # container images/layers
+du -sh /var/log/                 # system/app logs
+du -sh /var/lib/kubelet/         # pod volumes, emptyDir
+du -sh /var/lib/etcd/            # etcd data (master only)
+```
+
+### Fix
+```bash
+# Clean unused container images
+crictl rmi --prune
+
+# Clean up stopped containers
+crictl rm $(crictl ps -a -q --state exited)
+
+# Trim journal logs
+sudo journalctl --vacuum-size=100M
+sudo journalctl --vacuum-time=2d
+```
+
+Once disk usage drops below the threshold, kubelet **automatically** clears DiskPressure — no manual intervention needed.
+
+### Default eviction thresholds (`/var/lib/kubelet/config.yaml`)
+```yaml
+evictionHard:
+  nodefs.available: "10%"     # trigger below 10% free
+  nodefs.inodesFree: "5%"     # inode pressure
+  imagefs.available: "15%"    # image filesystem
+```
+
+---
+
+## 3. Resource Constraint (Pod Stuck Pending)
+
+### Diagnosis
+```bash
+kubectl describe pod <name>     # Events: "0/2 nodes are available: insufficient cpu"
+kubectl describe nodes | grep -A5 "Allocated resources"   # see what's used vs available
+```
+
+### Fix
+Reduce the pod's resource requests to fit within available node capacity:
+```bash
+kubectl edit pod <name>    # reduce resources.requests.cpu / resources.requests.memory
+```
+
+### Common mistake
+Don't confuse `requests` with `limits`:
+- `requests` — what the scheduler uses to find a node (affects scheduling)
+- `limits` — what the container is allowed to use at runtime (affects throttling/OOM)
+
+A pod stuck Pending is always a **requests** problem, not limits.
+
+---
+
+## 4. Pod Not Running
 
 ### Quick Diagnosis
 ```bash
@@ -143,7 +232,7 @@ kubectl debug -it <pod> --image=busybox -- sh  # ephemeral container (shares net
 
 ---
 
-## 3. Service Not Working
+## 5. Service Not Working
 
 ### Diagnosis Flow
 ```bash
@@ -186,7 +275,7 @@ NodePort/LoadBalancer **include** a ClusterIP — they're layered. You can alway
 
 ---
 
-## 4. DNS Issues
+## 6. DNS Issues
 
 ### Diagnosis
 ```bash
@@ -210,7 +299,7 @@ kubectl rollout restart deployment/coredns -n kube-system   # MUST restart after
 
 ---
 
-## 5. Control Plane Component Down
+## 7. Control Plane Component Down
 
 ### Diagnosis
 ```bash
@@ -242,7 +331,7 @@ Reference: https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-init
 
 ---
 
-## 6. NetworkPolicy Blocking Traffic
+## 8. NetworkPolicy Blocking Traffic
 
 ### Diagnosis
 ```bash
@@ -262,7 +351,7 @@ kubectl describe networkpolicy <name> -n <ns>
 
 ---
 
-## 7. Probes (Liveness/Readiness)
+## 9. Probes (Liveness/Readiness)
 
 ### Diagnosis
 ```bash
@@ -286,7 +375,7 @@ kubectl debug -it <pod> --image=busybox -- sh     # ephemeral container
 
 ---
 
-## 8. Cascading Failures
+## 10. Cascading Failures
 
 ### Example: Missing kube-proxy iptables rule
 ```
@@ -303,7 +392,7 @@ kube-proxy missing iptables rule for 10.96.0.1
 
 ---
 
-## 9. Kubernetes Component Flow
+## 11. Kubernetes Component Flow
 
 ### Deployment Creation Flow
 ```
@@ -337,7 +426,7 @@ kubectl create deployment
 
 ---
 
-## 10. Drill Answers Summary
+## 12. Drill Answers Summary
 
 | # | Scenario | Root Cause | Fix |
 |---|---|---|---|
