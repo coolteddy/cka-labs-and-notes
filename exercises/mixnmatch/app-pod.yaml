@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  creationTimestamp: null
+  labels:
+    run: app-pod
+  name: app-pod
+  namespace: multi-test
+spec:
+  containers:
+  - image: nginx:1.25
+    name: app
+    env:
+    - name: APP_ENV
+      valueFrom:
+        configMapKeyRef:
+          name: app-config
+          key: APP_ENV
+    - name: LOG_LEVEL
+      valueFrom:
+        configMapKeyRef:
+          name: app-config
+          key: LOG_LEVEL
+    - name: DB_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: app-secret
+          key: DB_PASSWORD 
+  - name: log-shipper
+    image: busybox
+    command: ["sh", "-c", "while true; do echo logging; sleep 5; done"]

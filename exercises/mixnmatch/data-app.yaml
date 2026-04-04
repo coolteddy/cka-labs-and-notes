@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: data-app
+  name: data-app
+  namespace: mix4
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: data-app
+  template:
+    metadata:
+      labels:
+        app: data-app
+    spec:
+      containers:
+      - image: nginx:1.25
+        name: nginx
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - mountPath: /data
+          name: pvcpvc
+      volumes:
+      - name: pvcpvc
+        persistentVolumeClaim:
+          claimName: mix-pvc
+  
