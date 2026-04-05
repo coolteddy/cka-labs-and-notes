@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress
+  namespace: sidecar-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wordpress
+  template:
+    metadata:
+      labels:
+        app: wordpress
+    spec:
+      containers:
+      - name: wordpress
+        image: wordpress:6.4
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: localhost
+        - name: WORDPRESS_DB_PASSWORD
+          value: secret
+        volumeMounts:
+        - mountPath: /var/log
+          name: logs
+      - name: busybox
+        image: busybox:stable
+        command:
+        - /bin/sh
+        - -c
+        - "touch /var/log/wordpress.log && tail -f /var/log/wordpress.log"
+        volumeMounts:
+        - mountPath: /var/log
+          name: logs
+      volumes:
+      - name: logs
+        emptyDir: {}

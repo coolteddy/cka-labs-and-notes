@@ -1,0 +1,6 @@
+apiVersion: stable.example.com/v1
+kind: Backup
+metadata:
+  name: my-backup
+  namespace: crd-demo
+spec: {}
