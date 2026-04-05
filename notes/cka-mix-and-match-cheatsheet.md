@@ -1,6 +1,6 @@
-# CKA Cheatsheet: Services & Networking, Workloads & Scheduling, Storage
+# CKA Cheatsheet: Services & Networking, Workloads & Scheduling, Storage, Cluster Admin
 
-Covers domains: Services & Networking (20%), Workloads & Scheduling (15%), Storage (10%)
+Covers domains: Services & Networking (20%), Workloads & Scheduling (15%), Storage (10%), Cluster Architecture (25%)
 
 ---
 
@@ -140,6 +140,27 @@ spec:
 ```
 
 **Gotcha:** `tls.hosts[]` and `rules[].host` must match exactly.
+
+**Always specify `--class=nginx`** when creating ingress — exam clusters use nginx ingress controller:
+```bash
+kubectl create ingress echo -n echo-sound \
+  --rule="example.org/echo=echoserver-service:8080" \
+  --class=nginx
+```
+
+**pathType: Prefix vs Exact:**
+- `Exact` → matches only `/echo` literally (nginx may normalise path and fail)
+- `Prefix` → matches `/echo`, `/echo/`, `/echo/anything` — use this by default
+- Default from `kubectl create ingress` is `Exact` — change to `Prefix` if path matching fails
+
+**Also expose containerPort on the deployment** if question says "expose container port":
+```bash
+kubectl edit deployment <name> -n <ns>
+# add under containers[0]:
+# ports:
+# - containerPort: 80
+#   protocol: TCP
+```
 
 **Rewrite annotation** (when backend only serves `/`):
 ```yaml
@@ -293,6 +314,29 @@ kubectl rollout undo deployment/web --to-revision=1 -n <ns>
 
 **Note:** `kubectl set env` works on Deployments (triggers rolling update). Does NOT work on bare Pods — pods are immutable after creation.
 
+**Sidecar container — command array structure:**
+```yaml
+containers:
+- name: sidecar
+  image: busybox:stable
+  command:
+  - /bin/sh
+  - -c
+  - "touch /var/log/app.log && tail -f /var/log/app.log"  # one string — never split shell cmd across elements
+  volumeMounts:
+  - name: logs
+    mountPath: /var/log
+```
+
+**Shared volume between main + sidecar:**
+```yaml
+volumes:
+- name: logs
+  emptyDir: {}
+```
+
+**Gotcha:** `tail -f <file>` crashes if file doesn't exist yet. Always `touch` the file first.
+
 ### Multi-Container Pod
 
 ```bash
@@ -385,6 +429,22 @@ kubectl get hpa web-hpa -n <ns>
 
 **Note:** Flag is `--cpu-percent`, not `--cpu`.
 
+**Always include `-n <namespace>` in the imperative command** so it's baked into the YAML:
+```bash
+kubectl autoscale deployment apache-server -n autoscale --min=1 --max=4 --cpu-percent=50 --dry-run=client -o yaml > hpa.yaml
+```
+
+**HPA behavior block** — add after metrics section:
+```yaml
+behavior:
+  scaleDown:
+    stabilizationWindowSeconds: 30   # wait 30s before scaling down
+  scaleUp:
+    stabilizationWindowSeconds: 0    # scale up immediately
+```
+
+`behavior` → `scaleDown`/`scaleUp` → `stabilizationWindowSeconds` — three levels deep.
+
 ### PodDisruptionBudget
 
 ```bash
@@ -401,6 +461,22 @@ kubectl create priorityclass high-priority --value=1000
 # --global-default omitted = false (default)
 # Only ONE PriorityClass can have globalDefault: true
 ```
+
+**Identify user-defined vs system PriorityClass:**
+- User-defined → normal values (100, 1000, etc.)
+- System built-in → values in the billions (`2000000000`+): `system-cluster-critical`, `system-node-critical`
+
+**`priorityClassName` goes in `spec.template.spec`** of a Deployment:
+```yaml
+spec:
+  template:
+    spec:
+      priorityClassName: high-priority
+      containers:
+      - name: app
+```
+
+**Calculate value:** `kubectl get priorityclass` → find highest user-defined value → subtract 1.
 
 ### Node Drain & Uncordon
 
@@ -426,6 +502,36 @@ resources:
 ```
 
 **Units:** `m` = millicores, `Mi` = mebibytes (binary), `M` = megabytes (SI). Use `Mi`/`Gi` unless task specifies otherwise.
+
+**Pending pod due to Insufficient cpu/memory — quick fix for exam:**
+```bash
+# 1. Check why pending
+kubectl describe pod <pod> -n <ns>   # scroll to Events: at bottom
+
+# 2. Fix — reduce resource requests to safe values
+kubectl edit deployment <name> -n <ns>
+# set cpu: 250m  memory: 256Mi  → apply → verify pods Running
+```
+
+**Triage order for pending pods:**
+1. `kubectl describe pod` → Events → read the reason
+2. `Insufficient cpu/memory` → reduce requests
+3. `taint` related → check tolerations / nodeSelector
+4. Don't check taints/nodeSelector first unless events say so
+
+**Resource math (if exam asks to calculate fairly):**
+```bash
+# Convert: 1 CPU = 1000m | Ki → Mi: divide by 1024 | Mi → Gi: divide by 1024
+# bc doesn't handle decimals — use * 90 / 100 instead of * 0.9
+
+kubectl describe node <node> | grep -A6 Allocatable
+kubectl describe node <node> | grep -A10 'Allocated resources'
+
+# CPU remaining with 10% buffer divided by pending pods:
+echo "(2000 - 1150) * 90 / 100 / 2" | bc
+# Memory (convert Ki→Mi first, then same pattern):
+echo "(1857 - 900) * 90 / 100 / 2" | bc
+```
 
 ### StatefulSet
 
@@ -476,15 +582,18 @@ helm search repo nginx --versions   # show all versions
 helm install web-release bitnami/nginx -n <ns> \
   --set replicaCount=2
 
-# Find values to override
-helm show values bitnami/nginx | grep -i replica
+# Find values to override — grep for exact key names
+helm show values bitnami/nginx | grep -Ei 'replica|type'
 
 # Check installed release
 helm list -n <ns>
 helm get metadata web-release -n <ns>   # shows chart name + version
 
-# Upgrade
-helm upgrade web-release bitnami/nginx -n <ns> --set replicaCount=3
+# Upgrade — re-specify all values or use --reuse-values
+helm upgrade web-release bitnami/nginx -n <ns> --set replicaCount=3 --set service.type=NodePort
+
+# Better: reuse previous values, only override what changed
+helm upgrade web-release bitnami/nginx -n <ns> --reuse-values --set replicaCount=3
 
 # Rollback (creates NEW revision)
 helm history web-release -n <ns>
@@ -545,6 +654,18 @@ spec:
 
 **Trap:** `storageClassName: ""` ≠ `storageClassName: manual`. Empty string only matches PVs with explicitly empty storageClassName.
 
+**Bind PVC directly to existing PV (Retain policy recovery):**
+```yaml
+spec:
+  storageClassName: ""      # empty string = bypass StorageClass, bind directly to PV
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi          # must match PV capacity exactly
+```
+Check PV details first: `kubectl get pv <name> -o yaml` — match accessModes, capacity, and leave storageClassName empty.
+
 **Diagnose PVC stuck Pending:**
 ```bash
 kubectl describe pvc <name> -n <ns>
@@ -566,6 +687,19 @@ allowVolumeExpansion: true
 ```
 
 **`WaitForFirstConsumer`** — PVC stays `Pending` until a pod using it is created. Expected behaviour.
+
+**Set StorageClass as default:**
+```yaml
+metadata:
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"   # string "true" not boolean
+```
+
+**Remove default from existing StorageClass** (if replacing):
+```bash
+kubectl annotate sc <old-sc> storageclass.kubernetes.io/is-default-class-
+# trailing - removes the annotation
+```
 
 ### Expand PVC
 
@@ -682,6 +816,25 @@ kubectl describe resourcequota my-quota -n <ns>
 | Ingress TLS secret name | Must match exactly in both `tls.secretName` and the secret resource |
 | `1G` vs `1Gi` | Different values. Match exactly what the task specifies |
 | `kubectl get endpoints svc <name>` | `svc` treated as resource name. Use `kubectl get endpoints <name> -n <ns>` |
+| HPA behavior nesting | `behavior` → `scaleDown` → `stabilizationWindowSeconds` — three levels deep |
+| HPA imperative missing `-n` | Always add `-n <ns>` in `kubectl autoscale` so namespace is baked into YAML |
+| Helm upgrade loses values | Use `--reuse-values` to keep previous values, only override what changed |
+| StorageClass default | Set via annotation `storageclass.kubernetes.io/is-default-class: "true"` — not a field |
+| Remove annotation | `kubectl annotate sc <name> <key>-` — trailing `-` removes the annotation |
+| PVC bind to existing PV | Set `storageClassName: ""` (empty string) to bypass StorageClass and bind directly |
+| CRD metadata.name | Must be `<plural>.<group>` — e.g. `backups.stable.example.com` |
+| CRD schema required | Cannot omit `openAPIV3Schema`. Minimum: `openAPIV3Schema: type: object` |
+| ConfigMap immutable | `immutable: true` at top level (not under data). Delete+recreate to change values after |
+| Ingress pathType default | `kubectl create ingress` defaults to `Exact`. Change to `Prefix` if path matching fails |
+| Ingress missing --class | Always add `--class=nginx`. Without it ingress has no controller and won't work |
+| Expose containerPort | Question says "expose container port" = add `ports.containerPort` to deployment spec too |
+| Gateway API NodePort | Find NodePort on the Gateway's own service in your namespace, not the controller namespace |
+| Cluster upgrade drain order | Control plane: upgrade kubeadm → apply → drain → upgrade kubelet. Worker: drain first |
+| Cluster upgrade worker kubectl | Don't install kubectl on worker nodes — not needed, only kubeadm + kubelet |
+| Sidecar command array | `/bin/sh`, `-c`, `"full command"` — entire shell command is ONE string as third element |
+| Sidecar file not found | `tail -f` crashes if file missing. Use `touch <file> && tail -f <file>` |
+| User-defined PriorityClass | Normal values (100-10000). System classes have values in billions (2000000000+) |
+| Pending pod triage | Check `Events:` in `describe pod` first — it tells you exactly why. Don't guess taints/selectors |
 
 ---
 
@@ -696,6 +849,224 @@ kubectl set env deployment/<name> KEY=value
 kubectl set env deployment/<name> KEY-              # remove env var
 kubectl set serviceaccount deployment/<name> <sa-name>
 ```
+
+---
+
+## Gateway API
+
+```yaml
+# 1. Create Gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: web-gateway
+  namespace: <ns>
+spec:
+  gatewayClassName: nginx       # check with: kubectl get gatewayclass
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    hostname: gateway.web.k8s.local
+
+---
+# 2. Create HTTPRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web-route
+  namespace: <ns>
+spec:
+  parentRefs:
+  - name: web-gateway
+  hostnames:
+  - gateway.web.k8s.local
+  rules:
+  - backendRefs:
+    - name: web-service
+      port: 80
+```
+
+**Key difference from Ingress:** Gateway API provisions its own **dedicated dataplane pod + NodePort service** in your namespace when you create a Gateway. Find the NodePort on that service — not on the controller namespace:
+```bash
+kubectl get svc -n <ns>   # look for <gateway-name>-nginx NodePort service
+```
+
+**Verify:** `curl -H 'Host: gateway.web.k8s.local' http://<node-ip>:<nodeport>`
+
+---
+
+## ConfigMap
+
+```bash
+# Create
+kubectl create configmap app-config -n <ns> \
+  --from-literal=LOG_LEVEL=info \
+  --from-literal=APP_ENV=production
+
+# Edit a value
+kubectl edit cm app-config -n <ns>
+
+# Make immutable (cannot be edited after — pods must be restarted to pick up changes)
+kubectl edit cm app-config -n <ns>
+# add at top level: immutable: true
+
+# Verify field
+kubectl explain cm.immutable
+
+# Restart deployment to pick up new ConfigMap values
+kubectl rollout restart deployment <name> -n <ns>
+```
+
+**Immutable ConfigMap YAML:**
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+immutable: true        # top level, not under data
+data:
+  LOG_LEVEL: debug
+```
+
+**Gotcha:** Once `immutable: true` is set, any edit attempt is rejected: `field is immutable when immutable is set`. To change values you must delete and recreate the ConfigMap, then restart pods.
+
+---
+
+## CRD — CustomResourceDefinition
+
+**Minimum valid CRD:**
+```yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backups.stable.example.com   # MUST be <plural>.<group>
+spec:
+  group: stable.example.com
+  scope: Namespaced                  # or Cluster
+  names:
+    plural: backups
+    singular: backup
+    kind: Backup
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object                 # minimum required — cannot omit openAPIV3Schema
+```
+
+**Create a CR instance after CRD is created:**
+```yaml
+apiVersion: stable.example.com/v1
+kind: Backup
+metadata:
+  name: my-backup
+  namespace: <ns>
+spec: {}
+```
+
+**Inspect CRD fields:**
+```bash
+kubectl explain backup
+kubectl explain backup.spec
+```
+
+**Exam tip:** Copy from docs and strip back to minimum. The only required schema is `openAPIV3Schema: type: object`.
+
+---
+
+## CNI
+
+**Where CNI config lives on each node:**
+```bash
+ls /etc/cni/net.d/
+# e.g. 10-calico.conflist, 10-flannel.conflist
+```
+
+**Check pod network CIDR:**
+```bash
+kubectl describe node | grep -i cidr
+```
+
+**Check pod IP assignment:**
+```bash
+kubectl get pods -o wide              # fastest — shows IP column
+kubectl describe pod <pod> -n <ns>    # more detail — Events show CNI errors
+```
+
+**If pod has no IP:** Events will say `Failed to create pod sandbox: CNI plugin not initialized` → CNI is broken or not installed.
+
+**After CNI issues — restart order:**
+```bash
+kubectl rollout restart daemonset kube-proxy -n kube-system    # fix ClusterIP routing first
+kubectl rollout restart daemonset calico-node -n kube-system   # fix pod network second
+```
+
+---
+
+## Cluster Upgrade
+
+**Full upgrade procedure — control plane first, then workers:**
+
+```bash
+# === CONTROL PLANE ===
+
+# 1. Add new version repo
+sudo vi /etc/apt/sources.list.d/kubernetes.list
+# change v1.33 → v1.34
+
+# 2. Upgrade kubeadm
+sudo apt-mark unhold kubeadm
+sudo apt-get update && sudo apt-get install -y kubeadm='1.34.0-1.1'
+sudo apt-mark hold kubeadm
+
+# 3. Check upgrade plan
+sudo kubeadm upgrade plan
+
+# 4. Apply upgrade (pre-pull images first to avoid timeout)
+sudo kubeadm config images pull --kubernetes-version v1.34.0
+sudo kubeadm upgrade apply v1.34.0
+
+# 5. Drain control plane
+kubectl drain k8s-master --ignore-daemonsets
+
+# 6. Upgrade kubelet and kubectl
+sudo apt-mark unhold kubelet kubectl
+sudo apt-get install -y kubelet='1.34.0-1.1' kubectl='1.34.0-1.1'
+sudo apt-mark hold kubelet kubectl
+sudo systemctl daemon-reload && sudo systemctl restart kubelet
+
+# 7. Uncordon
+kubectl uncordon k8s-master
+
+# === WORKER NODE ===
+# (drain from master first, then ssh to worker)
+
+kubectl drain k8s-worker --ignore-daemonsets   # run from master
+
+# ssh to worker:
+sudo vi /etc/apt/sources.list.d/kubernetes.list   # change repo version
+sudo apt-mark unhold kubeadm
+sudo apt-get update && sudo apt-get install -y kubeadm='1.34.0-1.1'
+sudo apt-mark hold kubeadm
+sudo kubeadm upgrade node
+sudo apt-mark unhold kubelet
+sudo apt-get install -y kubelet='1.34.0-1.1'   # kubectl not needed on worker
+sudo apt-mark hold kubelet
+sudo systemctl daemon-reload && sudo systemctl restart kubelet
+
+# back on master:
+kubectl uncordon k8s-worker
+
+# Verify
+kubectl get nodes   # both nodes should show new version
+```
+
+**Key order:** `kubeadm upgrade apply` THEN drain THEN upgrade kubelet (not drain first on control plane).
+**Worker:** drain from master FIRST, then upgrade kubeadm + kubelet on worker.
+**Verify kubelet version:** `kubelet --version` on each node.
 
 ---
 
