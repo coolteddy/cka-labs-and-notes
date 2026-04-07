@@ -1,5 +1,7 @@
 # CKA Notes: Workload and Scheduling
 
+> **Domain weight: 15%.** Covers Deployments, DaemonSets, StatefulSets, Jobs, CronJobs, scheduling, autoscaling, probes, and security.
+
 ## Deployments
 
 - Create: `kubectl create deploy web --image=nginx:1.25 --replicas=3`
@@ -338,6 +340,359 @@ or:
 kubectl exec -it cm-vol-pod -- sh -c 'while true; do cat /etc/settings/env.text; echo; sleep 5; done'
 ```
 
+## DaemonSet
+
+Runs exactly **one pod per node**. Used for cluster-level agents (logging, monitoring, networking).
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: monitoring-agent
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: monitoring
+  updateStrategy:
+    type: RollingUpdate        # or OnDelete
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: monitoring
+    spec:
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule     # add this to run on control plane nodes too
+      containers:
+      - name: agent
+        image: monitoring:1.0
+```
+
+```bash
+kubectl get ds -n kube-system                     # list DaemonSets
+kubectl rollout status daemonset/<name>
+kubectl rollout undo daemonset/<name>
+kubectl set image daemonset/<name> <container>=<image>
+```
+
+**Update strategies:**
+- `RollingUpdate` (default): old pods replaced progressively
+- `OnDelete`: new pods only created when old pods are manually deleted
+
+> **Gotcha:** DaemonSets have no `replicas` field. Scale is controlled by node count.
+
+> **Gotcha:** DaemonSets don't run on control plane nodes by default unless you add a toleration for the `node-role.kubernetes.io/control-plane:NoSchedule` taint.
+
+---
+
+## StatefulSet
+
+Ordered, stable pod identity. Each pod gets a persistent name and its own PVC.
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: web
+spec:
+  serviceName: "web-headless"    # headless service name (required)
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.25
+        volumeMounts:
+        - name: data
+          mountPath: /usr/share/nginx/html
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast
+      resources:
+        requests:
+          storage: 1Gi
+```
+
+**Pod naming:** `web-0`, `web-1`, `web-2` (ordinal, predictable)
+
+**PVC naming:** `data-web-0`, `data-web-1`, `data-web-2`
+
+**DNS per pod:** `web-0.web-headless.<ns>.svc.cluster.local`
+
+> **Gotcha:** Deleting a StatefulSet does **not** delete PVCs — you must delete them manually.
+
+> **Gotcha:** `serviceName` must reference a **headless** service (`clusterIP: None`).
+
+---
+
+## Jobs — Advanced Fields
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: batch-job
+spec:
+  completions: 6            # total successful completions needed
+  parallelism: 2            # pods running simultaneously at any time
+  backoffLimit: 3           # retries before job is marked Failed (default 6)
+  activeDeadlineSeconds: 60 # job killed after this many seconds total
+  template:
+    spec:
+      restartPolicy: OnFailure   # or Never (required for Jobs — cannot be Always)
+      containers:
+      - name: worker
+        image: busybox
+        command: ["sh", "-c", "echo done"]
+```
+
+| Field | Meaning |
+|---|---|
+| `completions` | N successful pod completions required for job success |
+| `parallelism` | Max pods running at once |
+| `backoffLimit` | Max pod retries before Job fails (exponential backoff: 10s, 20s, 40s...) |
+| `activeDeadlineSeconds` | Hard timeout for entire job — overrides backoffLimit |
+
+> **Gotcha:** `restartPolicy` must be `OnFailure` or `Never` for Jobs. `Always` is not allowed.
+
+> **Gotcha:** Exit code 0 = success. Anything else = failure (counts against backoffLimit).
+
+---
+
+## CronJob — Advanced Fields
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cleanup
+spec:
+  schedule: "0 2 * * *"          # 2 AM daily (UTC)
+  concurrencyPolicy: Forbid       # Allow | Forbid | Replace
+  startingDeadlineSeconds: 60     # skip if can't start within 60s of scheduled time
+  suspend: false                  # true = pause all future runs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: cleanup
+            image: busybox
+            command: ["sh", "-c", "echo running cleanup"]
+```
+
+**concurrencyPolicy:**
+| Value | Behaviour |
+|---|---|
+| `Allow` (default) | New job runs even if previous job still running |
+| `Forbid` | Skip new run if previous job still running |
+| `Replace` | Cancel previous job and start the new one |
+
+```bash
+# Suspend/resume
+kubectl patch cronjob <name> -p '{"spec":{"suspend":true}}'
+kubectl patch cronjob <name> -p '{"spec":{"suspend":false}}'
+
+# Trigger immediately (without waiting for schedule)
+kubectl create job --from=cronjob/<name> manual-run-1
+```
+
+> **Gotcha:** If a CronJob misses 100 or more scheduled runs, it stops creating new jobs. Use `startingDeadlineSeconds` to control the window.
+
+---
+
+## Security Context
+
+### Pod-level vs Container-level
+
+```yaml
+spec:
+  securityContext:               # Pod-level — applies to ALL containers
+    runAsUser: 1000
+    runAsGroup: 3000
+    fsGroup: 2000               # group owner of mounted volumes
+    runAsNonRoot: true
+  containers:
+  - name: app
+    image: nginx
+    securityContext:             # Container-level — overrides pod-level
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+        add: ["NET_BIND_SERVICE"]
+```
+
+| Field | Level | Effect |
+|---|---|---|
+| `runAsUser` | Pod or Container | UID for process |
+| `runAsGroup` | Pod or Container | GID for process |
+| `fsGroup` | Pod only | GID for volume ownership |
+| `runAsNonRoot` | Pod or Container | Reject if UID=0 |
+| `allowPrivilegeEscalation` | Container only | Block setuid/setcap escalation |
+| `readOnlyRootFilesystem` | Container only | Mount `/` as read-only |
+| `capabilities.drop/add` | Container only | Linux capability control |
+
+---
+
+## Pod Lifecycle Hooks
+
+```yaml
+containers:
+- name: app
+  image: nginx
+  lifecycle:
+    postStart:
+      exec:
+        command: ["/bin/sh", "-c", "echo 'started' > /tmp/started"]
+    preStop:
+      exec:
+        command: ["/bin/sh", "-c", "nginx -s quit; sleep 5"]
+```
+
+- **postStart**: Runs immediately after container start, in **parallel** with the main process. Container stays `ContainerCreating` until postStart completes.
+- **preStop**: Runs **before** SIGTERM is sent. Use for graceful shutdown. Container waits for preStop to finish before receiving SIGTERM.
+
+Handler types: `exec`, `httpGet`, `tcpSocket`
+
+> **Gotcha:** If postStart fails, the container is killed and restarted.
+
+---
+
+## Rollout Controls
+
+```bash
+# Pause a rollout (changes accumulate but don't apply)
+kubectl rollout pause deployment/<name>
+
+# Resume the rollout
+kubectl rollout resume deployment/<name>
+
+# Watch live status
+kubectl rollout status deployment/<name> -w
+
+# Show revision history
+kubectl rollout history deployment/<name>
+kubectl rollout history deployment/<name> --revision=2   # details for one revision
+
+# Undo last rollout
+kubectl rollout undo deployment/<name>
+
+# Undo to specific revision
+kubectl rollout undo deployment/<name> --to-revision=2
+```
+
+> **Gotcha:** `kubectl rollout pause` + multiple `kubectl set image` / `kubectl set env` = batch changes applied together on `resume`. Efficient for multi-change rollouts.
+
+---
+
+## Inter-Pod Affinity and Anti-Affinity
+
+```yaml
+affinity:
+  podAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:    # hard
+    - labelSelector:
+        matchLabels:
+          app: cache
+      topologyKey: kubernetes.io/hostname   # "same node as a cache pod"
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:   # soft
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchLabels:
+            app: web
+        topologyKey: kubernetes.io/hostname  # "prefer not same node as another web pod"
+```
+
+**topologyKey options:**
+- `kubernetes.io/hostname` — node level (most common)
+- `topology.kubernetes.io/zone` — availability zone level
+
+> **Gotcha:** Inter-pod affinity is expensive to compute at scale. Prefer topology spread constraints for spreading workloads evenly.
+
+---
+
+## Topology Spread Constraints
+
+Distribute pods evenly across nodes or zones.
+
+```yaml
+spec:
+  topologySpreadConstraints:
+  - maxSkew: 1                        # max difference in pod count between any two domains
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule  # hard: don't schedule if violated
+    labelSelector:
+      matchLabels:
+        app: web
+  - maxSkew: 2
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway # soft: prefer spread but schedule anyway
+    labelSelector:
+      matchLabels:
+        app: web
+```
+
+| `whenUnsatisfiable` | Behaviour |
+|---|---|
+| `DoNotSchedule` | Hard constraint — pod stays Pending if maxSkew would be violated |
+| `ScheduleAnyway` | Soft constraint — schedule but try to minimize skew |
+
+---
+
+## envFrom — Bulk Environment Import
+
+Instead of importing one key at a time, import all keys from a ConfigMap or Secret:
+
+```yaml
+spec:
+  containers:
+  - name: app
+    image: nginx
+    envFrom:
+    - configMapRef:
+        name: app-config      # ALL keys become env vars
+    - secretRef:
+        name: app-secret      # ALL keys become env vars
+    env:
+    - name: OVERRIDE_KEY      # individual entries override envFrom
+      value: "override-value"
+```
+
+> **Gotcha:** If a ConfigMap key name is not a valid env var name (e.g., contains hyphens), the pod may fail to start. Use `env[].valueFrom.configMapKeyRef` for those.
+
+---
+
+## Deployment Recreate Strategy
+
+```yaml
+spec:
+  strategy:
+    type: Recreate            # kill ALL old pods first, then create new ones
+```
+
+Vs `RollingUpdate` (default): `Recreate` causes downtime but avoids running two versions simultaneously. Useful for databases that can't run two versions at once.
+
+---
+
 ## Exam Habits
 
 - Prefer explicit commands over clever shortcuts.
@@ -345,3 +700,22 @@ kubectl exec -it cm-vol-pod -- sh -c 'while true; do cat /etc/settings/env.text;
 - For Services: check both `svc` and `endpoints`.
 - For Deployments: check `deploy`, `rs`, and `pods`.
 - For rollout problems: use `kubectl describe pod`, `kubectl rollout status`, and `kubectl rollout history`.
+- `kubectl rollout undo` is faster than editing YAML when an image update breaks things.
+- `kubectl create job --from=cronjob/<name> <job-name>` triggers a CronJob immediately.
+
+---
+
+## Workload & Scheduling Exam Gotchas
+
+| Gotcha | Correct Approach |
+|--------|---|
+| DaemonSet running on wrong nodes | Check node taints; add tolerations to DS pod spec |
+| DaemonSet won't run on control plane | Add toleration for `node-role.kubernetes.io/control-plane:NoSchedule` |
+| StatefulSet PVCs not cleaned up | Must delete PVCs manually after deleting StatefulSet |
+| Job restartPolicy: Always | Not allowed — use `OnFailure` or `Never` |
+| CronJob runs overlap | Set `concurrencyPolicy: Forbid` to prevent overlapping runs |
+| preStop not running long enough | Increase `terminationGracePeriodSeconds` (default 30s) |
+| envFrom + invalid key name | Use `env[].valueFrom.configMapKeyRef` for hyphenated keys |
+| Rollout pause forgot to resume | `kubectl rollout resume deployment/<name>` |
+| nodeName bypasses scheduler | Use `nodeSelector` or affinity when testing preemption |
+| Inter-pod affinity wrong topologyKey | `kubernetes.io/hostname` = node, `topology.kubernetes.io/zone` = zone |

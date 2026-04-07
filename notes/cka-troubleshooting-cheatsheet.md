@@ -1,6 +1,9 @@
 # CKA Troubleshooting Cheatsheet
 
-Covers the 30% domain: node failures, pod debugging, service issues, DNS, control plane, networking.
+> **Domain weight: 30% — Highest single domain. Cluster Architecture + Troubleshooting = 55% combined.**
+> Allowed docs during exam: `kubernetes.io/docs`, `helm.sh/docs`, `kubernetes.io/blog`
+
+Covers: node failures, pod debugging, service issues, DNS, control plane, etcd, networking, storage, RBAC, scheduling.
 
 ---
 
@@ -64,14 +67,41 @@ Covers the 30% domain: node failures, pod debugging, service issues, DNS, contro
 
 ---
 
-## General Troubleshooting Flow
+## Universal Troubleshooting Flow
 
-```
-kubectl get nodes                    # node health
-kubectl get pods -A                  # cluster-wide pod status
-kubectl describe <resource> <name>   # events + config
-kubectl logs <pod> [--previous]      # app/container logs
-journalctl -u kubelet -n 50         # node-level logs
+> **Always follow this sequence. Never jump straight to editing YAML.**
+
+```bash
+# 1. SET CONTEXT FIRST — wrong cluster = 0 marks
+kubectl config use-context <cluster>
+kubectl config set-context --current --namespace=<ns>
+
+# 2. OBSERVE — what is broken?
+kubectl get <resource> -n <ns>
+kubectl get events -n <ns> --sort-by=.metadata.creationTimestamp
+
+# 3. DESCRIBE — why is it broken?
+kubectl describe <resource> <name> -n <ns>
+# → Read "Events:" bottom-up (newest first)
+# → Read "Conditions:" section
+
+# 4. LOGS — what did the app say?
+kubectl logs <pod> -n <ns>
+kubectl logs <pod> -n <ns> --previous           # if already restarted
+kubectl logs <pod> -n <ns> -c <container>       # multi-container pod
+
+# 5. DIG DEEPER — node/system level?
+ssh <node>
+sudo systemctl status kubelet
+sudo journalctl -u kubelet --no-pager | tail -50
+sudo crictl ps -a                               # all containers incl. exited
+sudo crictl logs <container-id>
+
+# 6. FIX — minimal change, right level
+
+# 7. VERIFY — did it actually work?
+kubectl get <resource> -w
+kubectl exec <pod> -- <connectivity-test>
 ```
 
 ---
@@ -115,6 +145,26 @@ journalctl -u kubelet -n 50          # or -f for live streaming
 | Bad kubelet args | `--port=0` or similar | Edit `/etc/default/kubelet`, restart kubelet |
 | Certificate expired | `certificate has expired` | `sudo kubeadm certs renew all` + restart kubelet |
 | CNI not installed | `CNI plugin not found` | Reinstall CNI (Calico/Flannel) |
+| Wrong API server URL | `connection refused` to wrong port | Fix `server:` in `/etc/kubernetes/kubelet.conf` |
+| Wrong clusterDNS IP | `failed to sync...` | Fix `clusterDNS` in `/var/lib/kubelet/config.yaml` |
+| cgroupDriver mismatch | `failed to create cpuset cgroup` | Match `cgroupDriver` to container runtime (systemd) |
+
+### Kubelet Config Files to Check
+
+```bash
+# Main config — clusterDNS, staticPodPath, cgroupDriver, eviction settings
+sudo cat /var/lib/kubelet/config.yaml | grep -E "clusterDNS|staticPodPath|cgroupDriver"
+
+# Kubeconfig — API server URL and port (must be https://<cp>:6443)
+sudo cat /etc/kubernetes/kubelet.conf | grep server
+
+# Systemd unit overrides — extra args, if any
+sudo cat /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+```
+
+> **Gotcha:** After editing any kubelet config file, always run:
+> `sudo systemctl daemon-reload && sudo systemctl restart kubelet`
+> Config changes don't apply until restart.
 
 ### Log Commands
 ```bash
@@ -211,17 +261,48 @@ kubectl logs <pod> -n <ns> [--previous]
 |---|---|---|
 | Pending | Not scheduled | `kubectl describe pod` → Events (scheduler, taints, resources, nodeSelector) |
 | ImagePullBackOff | Wrong image or no access | Check image name, tag, registry credentials |
-| CrashLoopBackOff | Container starts then exits | `kubectl logs --previous`, check command/args/env |
+| ErrImagePull | First pull failure (becomes ImagePullBackOff) | Same as ImagePullBackOff |
+| CrashLoopBackOff | Container starts then exits repeatedly | `kubectl logs --previous`, check exit code |
 | ContainerCreating | Stuck setting up | CNI issue, volume mount issue, ConfigMap/Secret missing |
-| ErrImagePull | First pull failure | Same as ImagePullBackOff |
+| Init:0/1 | Init container failing | `kubectl logs <pod> -c <init-container-name>` |
+| OOMKilled | Memory limit exceeded | Increase `resources.limits.memory` |
+| Running, 0/1 Ready | Readiness probe failing | `kubectl describe pod` → probe config + Events |
+| Terminating (stuck) | Node dead or finalizer blocking | Force delete if node confirmed dead |
+| Completed | Job/init container done | Normal — not an error |
 
 ### CrashLoopBackOff Debugging
+
 ```bash
 kubectl logs <pod> --previous          # most reliable — logs from last crashed container
 kubectl describe pod <pod>             # check command, args, env, probes
 kubectl exec <pod> -- <cmd>            # if you can catch it running briefly
 kubectl debug -it <pod> --image=busybox -- sh  # ephemeral container (shares network/PID namespace)
 ```
+
+### Exit Code Reference (from `kubectl describe pod` → Last State)
+
+| Exit Code | Meaning | Usual Cause |
+|---|---|---|
+| 0 | Clean exit | App finished (not a crash — check `restartPolicy`) |
+| 1 | General app error | App-level bug, bad config, missing env/secret |
+| 137 | OOMKilled (SIGKILL) | Memory limit exceeded |
+| 139 | Segmentation fault | Binary/runtime crash |
+| 143 | Graceful shutdown (SIGTERM) | Liveness probe killed it |
+
+```bash
+# Read exit code
+kubectl describe pod <name> | grep -A5 "Last State"
+```
+
+### OOMKilled Fix
+```bash
+kubectl describe pod <name> | grep -E "OOMKilled|Last State"
+# Fix: increase memory limit in the pod spec
+kubectl edit deployment <name>
+# Update: resources.limits.memory: "512Mi"  → "1Gi"
+```
+
+> **Gotcha:** OOMKilled happens when the container hits its `limits.memory`, even if the **node** has plenty of free RAM. The limit is per-container, enforced regardless of node capacity.
 
 ### Pending Pod — Common Causes
 - **No node matches nodeSelector** → remove nodeSelector or label the node
@@ -444,18 +525,375 @@ kubectl create deployment
 
 ---
 
+## 13. etcd — Backup, Restore, and Health
+
+### Check etcd Health
+```bash
+# etcd runs as a static pod — check it first
+kubectl get pods -n kube-system | grep etcd
+kubectl logs -n kube-system etcd-<node>
+
+# Direct health check on control plane node
+ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  endpoint health
+
+# List members
+ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  member list
+```
+
+> **Tip:** Get cert paths from the etcd static pod manifest:
+> `grep -E "cacert|cert|key" /etc/kubernetes/manifests/etcd.yaml`
+
+### Backup
+```bash
+ETCDCTL_API=3 etcdctl snapshot save /opt/backup/etcd-snapshot.db \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key
+
+# Verify the snapshot
+ETCDCTL_API=3 etcdctl snapshot status /opt/backup/etcd-snapshot.db --write-out=table
+```
+
+### Restore — THE TRIPLE UPDATE RULE
+
+> **⚠️ Most common etcd restore failure:** Updating only ONE of the three required locations in the manifest.
+
+```bash
+# Step 1: Restore to a NEW directory
+ETCDCTL_API=3 etcdctl snapshot restore /opt/backup/etcd-snapshot.db \
+  --data-dir=/var/lib/etcd-restore
+
+# Step 2: Edit the static pod manifest — THREE places must all match the new path
+sudo vi /etc/kubernetes/manifests/etcd.yaml
+```
+
+The three fields to update (all must point to `/var/lib/etcd-restore`):
+
+```yaml
+# 1. The --data-dir flag (in command: section)
+- --data-dir=/var/lib/etcd-restore       # was: /var/lib/etcd
+
+# 2. The volumeMount inside the etcd container
+volumeMounts:
+- mountPath: /var/lib/etcd-restore       # was: /var/lib/etcd
+  name: etcd-data
+
+# 3. The hostPath volume (what gets mounted from the node)
+volumes:
+- hostPath:
+    path: /var/lib/etcd-restore          # was: /var/lib/etcd
+    type: DirectoryOrCreate
+  name: etcd-data
+```
+
+```bash
+# Step 3: kubelet auto-restarts etcd (~30s). Watch it recover:
+sudo crictl ps -a | grep etcd
+kubectl get pods -n kube-system | grep etcd
+kubectl get nodes   # verify cluster accessible
+```
+
+---
+
+## 14. Certificate Issues
+
+### Check Expiry
+```bash
+sudo kubeadm certs check-expiration   # all control plane certs
+
+# Check a specific cert manually
+openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout | grep -A2 "Validity"
+
+# Check kubelet client cert on a worker node
+openssl x509 -in /var/lib/kubelet/pki/kubelet-client-current.pem -text -noout | grep -A2 "Validity"
+```
+
+### Renew Certificates
+```bash
+sudo kubeadm certs renew all        # renew everything
+sudo kubeadm certs renew apiserver  # renew specific cert
+
+# CRITICAL: restart kubelet after renewal — new certs are on disk but
+# control plane components still hold the OLD certs in memory
+sudo systemctl restart kubelet
+
+# kubectl may also fail after renewal — update your kubeconfig
+sudo cp /etc/kubernetes/admin.conf ~/.kube/config
+```
+
+> **Gotcha:** `kubeadm certs renew` writes new certs to disk but doesn't reload components. Without restarting kubelet, you'll still get `x509: certificate has expired` errors.
+
+---
+
+## 15. Control Plane Static Pod — Deep Debugging
+
+When `kubectl` doesn't work (API server down), use `crictl` directly on the control plane node.
+
+### crictl Commands
+```bash
+sudo crictl ps -a                          # all containers incl. exited ones
+sudo crictl ps -a | grep apiserver         # find the apiserver container
+sudo crictl logs <container-id>            # read container logs
+sudo crictl inspect <container-id>         # full container config JSON
+```
+
+### Broken Manifest — Common Exam-Planted Bugs
+
+| Bug | Where | Symptom |
+|---|---|---|
+| Wrong `--etcd-servers` port (`2380` instead of `2379`) | kube-apiserver manifest | API server starts then crashes |
+| Wrong cert file path (typo) | kube-apiserver or etcd manifest | `no such file or directory` in logs |
+| Wrong `--advertise-address` | kube-apiserver manifest | clients can't reach API server |
+| Duplicate or malformed flag | any manifest `command:` section | container exits immediately |
+| Wrong image name (typo) | any manifest | ImagePullBackOff |
+| Wrong `--kubeconfig` path | scheduler or controller-manager | component can't auth to API server |
+
+```bash
+# Workflow
+sudo cp /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/   # backup first!
+sudo crictl logs <id>    # read the exact error
+sudo vi /etc/kubernetes/manifests/kube-apiserver.yaml         # fix it
+# Wait 15-30s for kubelet to detect change and restart the pod
+sudo crictl ps -a | grep apiserver   # watch for Running
+kubectl get nodes                    # verify
+```
+
+> **Gotcha:** kubelet takes 15–30s to detect a manifest change. Be patient — don't re-edit thinking it didn't apply.
+
+---
+
+## 16. Scheduling — Taint & Affinity Failures
+
+### Taint Effects Reference
+
+| Effect | Behaviour |
+|---|---|
+| `NoSchedule` | New pods won't be scheduled (existing pods unaffected) |
+| `PreferNoSchedule` | Scheduler tries to avoid the node but will use it if needed |
+| `NoExecute` | New pods won't schedule AND existing pods without toleration are evicted |
+
+```bash
+kubectl describe node <node> | grep Taint
+kubectl taint nodes <node> <key>=<value>:<effect>        # add
+kubectl taint nodes <node> <key>=<value>:<effect>-       # remove (trailing -)
+```
+
+### nodeAffinity Rules
+
+| Rule | Behaviour |
+|---|---|
+| `requiredDuringSchedulingIgnoredDuringExecution` | Hard rule — pod won't schedule if no match |
+| `preferredDuringSchedulingIgnoredDuringExecution` | Soft rule — prefers but schedules elsewhere if needed |
+
+```bash
+# Check node labels
+kubectl get nodes --show-labels
+kubectl label nodes <node> <key>=<value>   # add missing label
+```
+
+> **Gotcha:** A pod with `requiredDuringScheduling...` affinity that matches no node will stay Pending forever — even if the node has resources. Fix the label on the node or loosen the affinity.
+
+---
+
+## 17. Storage Failures
+
+### PVC Stuck Pending
+
+```bash
+kubectl describe pvc <name> -n <ns>   # read Events section
+kubectl get pv                        # check available PVs
+kubectl get sc                        # check StorageClasses
+```
+
+| PVC Pending Reason | Root Cause | Fix |
+|---|---|---|
+| `no persistent volumes available` | No matching static PV | Create a PV matching PVC spec exactly |
+| `storageclass not found` | Wrong `storageClassName` | Fix the name (or delete+recreate PVC — `storageClassName` is immutable) |
+| `AccessModes mismatch` | PVC wants RWX, PV only has RWO | Fix access modes to match |
+| `WaitForFirstConsumer` | Topology-aware SC, waiting for pod | Create the consuming pod to trigger binding |
+| Volume in Released state | PV was bound to deleted PVC | Clear claimRef — see below |
+
+```bash
+# Clear a Released PV so it can bind again
+kubectl patch pv <pv-name> -p '{"spec":{"claimRef": null}}'
+```
+
+### Static PV Binding Rules — ALL must match
+- `storageClassName` (exact string, or both empty `""`)
+- `accessModes` (PVC modes must be a subset of PV modes)
+- `storage` (PVC request ≤ PV capacity)
+
+> **Gotcha:** `storageClassName` is **immutable** in PVC after creation. If it's wrong, delete and recreate the PVC.
+
+### ReadWriteOnce Contention
+```bash
+kubectl describe pod <name>
+# Events: Multi-Attach error — Volume already exclusively attached to one node
+```
+RWO volumes can only be mounted on **one node** at a time. Multiple pods on different nodes → second pod fails.
+
+Fix: ensure all pods using the RWO volume schedule to the same node, or use `ReadWriteMany` (requires NFS/Ceph).
+
+---
+
+## 18. RBAC & Access Failures
+
+### "Forbidden" Error — Diagnosis
+```bash
+# Error: User "jane" cannot list resource "pods" in namespace "default"
+
+# Test permissions
+kubectl auth can-i list pods --as=jane
+kubectl auth can-i list pods --as=jane -n production
+kubectl auth can-i list pods --as=system:serviceaccount:default:my-sa
+
+# List ALL permissions for a user
+kubectl auth can-i --list --as=jane -n <ns>
+
+# Inspect bindings
+kubectl get role,rolebinding,clusterrole,clusterrolebinding -n <ns>
+kubectl describe rolebinding <name> -n <ns>
+```
+
+### Create Role + Bind
+```bash
+# Role (namespace-scoped)
+kubectl create role pod-reader --verb=get,list,watch --resource=pods -n <ns>
+kubectl create rolebinding pod-reader-binding \
+  --role=pod-reader \
+  --serviceaccount=<ns>:<sa-name> -n <ns>
+
+# ClusterRole (cluster-scoped)
+kubectl create clusterrole node-reader --verb=get,list,watch --resource=nodes
+kubectl create clusterrolebinding node-reader-binding \
+  --clusterrole=node-reader \
+  --user=jane
+```
+
+> **Gotcha:** When binding to a ServiceAccount use `--serviceaccount=<namespace>:<name>`, NOT `--user=<sa-name>`. Those create different binding subjects.
+
+---
+
+## 19. Resource Quota Blocking Pods
+
+```bash
+# Error: "pods" is forbidden: exceeded quota: ...
+
+kubectl describe resourcequota -n <ns>
+# Shows Used / Hard columns for each resource
+
+kubectl describe limitrange -n <ns>
+# Shows default requests/limits applied if pod doesn't specify them
+```
+
+> **Gotcha:** If a namespace has a ResourceQuota on CPU/memory, **every pod must declare `resources.requests` and `resources.limits`**. Pods without them are rejected immediately. This is the #1 "why won't my pod create" surprise when quotas are active.
+
+```yaml
+# Required when ResourceQuota is active in the namespace
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+```
+
+---
+
+## 20. kubectl top Not Working (Metrics Server)
+
+```bash
+kubectl top nodes
+# Error: metrics not available yet
+
+# Check if metrics-server is running
+kubectl get pods -n kube-system | grep metrics-server
+kubectl logs -n kube-system <metrics-server-pod>
+
+# Common fix — needs --kubelet-insecure-tls in kubeadm clusters
+kubectl edit deployment metrics-server -n kube-system
+# Add to args:
+# - --kubelet-insecure-tls
+```
+
+> **Gotcha:** In kubeadm clusters, kubelet uses self-signed certs. Without `--kubelet-insecure-tls`, metrics-server can't scrape data and `kubectl top` always errors. This flag is needed in most exam cluster setups.
+
+---
+
+## 21. kube-proxy Failures
+
+kube-proxy runs as a **DaemonSet**. If broken, Services won't route traffic even if pods are healthy.
+
+```bash
+kubectl get pods -n kube-system -l k8s-app=kube-proxy
+kubectl logs -n kube-system <kube-proxy-pod>
+
+# Force restart all kube-proxy pods
+kubectl rollout restart daemonset kube-proxy -n kube-system
+
+# Check the kube-proxy ConfigMap for misconfiguration
+kubectl get cm kube-proxy -n kube-system -o yaml
+# Look at: clusterCIDR, mode (iptables vs ipvs)
+```
+
+---
+
+## 22. Exam Scenario Catalogue
+
+High-frequency tasks from candidate reports. Each takes 5–12 minutes.
+
+| Scenario | Symptom | Root Cause Pattern | Key Fix |
+|---|---|---|---|
+| **A: Broken API server static pod** | `kubectl` hangs/refused | Wrong flag or path in manifest | `crictl logs` → fix manifest → wait 30s |
+| **B: Worker node NotReady** | Node shows NotReady | kubelet config bug | `journalctl -u kubelet` → fix config → daemon-reload + restart |
+| **C: etcd backup** | Task asks for snapshot | — | `etcdctl snapshot save` with all 3 cert flags |
+| **D: etcd restore** | Task asks to restore | — | `etcdctl snapshot restore` → update ALL 3 manifest locations |
+| **E: CrashLoopBackOff app** | Pod restarts constantly | Wrong env/cmd/probe | `logs --previous` → identify → edit deployment |
+| **F: Service no endpoints** | Connectivity failure | Selector mismatch | Compare `svc.selector` vs `pod.labels` → fix |
+| **G: NetworkPolicy cross-namespace** | Pod can't reach another NS | Missing `namespaceSelector` | Add `namespaceSelector` with namespace label |
+| **H: PVC stuck Pending** | Pod stuck ContainerCreating | No matching PV, wrong SC, wrong mode | `describe pvc` → fix or create PV |
+| **I: Deployment rollout broken** | New pods all failing | Bad image after update | `kubectl rollout undo deployment <name>` |
+| **J: Cert expiry** | `x509: certificate has expired` | Certs expired | `kubeadm certs renew all` → restart kubelet → update kubeconfig |
+| **K: Scheduling impossible** | Pod forever Pending | Taint + no toleration, or wrong nodeAffinity | Describe pod → fix toleration or label node |
+| **L: kubectl top fails** | metrics not available | metrics-server missing `--kubelet-insecure-tls` | Edit metrics-server deployment |
+
+---
+
 ## Exam Gotchas
 
-1. **Always specify `-n <namespace>`** — don't assume default
-2. **`kubectl logs --previous`** — use for CrashLoopBackOff, not exec
-3. **Endpoints empty ≠ no pods** — it means selector doesn't match
-4. **Endpoints populated ≠ traffic works** — targetPort could be wrong
-5. **After editing CoreDNS ConfigMap** — must restart CoreDNS deployment
-6. **After editing static pod manifests** — kubelet auto-reconciles, but restart kubelet if stuck
-7. **`kubeadm init phase`** — regenerate any control plane manifest without searching for files
-8. **NodePort services** — accessible on ALL node IPs, also have a ClusterIP
-9. **`/etc/default/kubelet`** — no daemon-reload needed; systemd unit files do need it
-10. **Don't guess probe paths** — exec into pod or check logs to find valid endpoints
-11. **API server port is always 6443** — memorise it
-12. **Read the task carefully** — "fix without deleting" vs "fix by any means"
-13. **Always verify end-to-end** — endpoints existing does not mean traffic is flowing
+1. **Always `kubectl config use-context`** — wrong cluster = 0 marks even with correct fix
+2. **Always specify `-n <namespace>`** — don't assume default
+3. **`kubectl logs --previous`** — use for CrashLoopBackOff, not exec
+4. **Endpoints empty ≠ no pods** — it means selector doesn't match pod labels
+5. **Endpoints populated ≠ traffic works** — targetPort could be wrong
+6. **After editing CoreDNS ConfigMap** — must restart CoreDNS deployment
+7. **After editing static pod manifests** — kubelet auto-reconciles in 15-30s, restart kubelet if stuck
+8. **`kubeadm init phase`** — regenerate any control plane manifest without searching for files
+9. **NodePort services** — accessible on ALL node IPs, also have a ClusterIP
+10. **`/etc/default/kubelet`** — no daemon-reload needed; systemd unit files do need it
+11. **Don't guess probe paths** — exec into pod or check logs to find valid endpoints
+12. **API server port is always 6443** — memorise it
+13. **Read the task carefully** — "fix without deleting" vs "fix by any means"
+14. **Always verify end-to-end** — endpoints existing does not mean traffic is flowing
+15. **etcd restore: ALL THREE locations** — `--data-dir`, `mountPath`, `hostPath.path` must all match
+16. **After `kubeadm certs renew`** — restart kubelet AND refresh `~/.kube/config`
+17. **OOMKilled ≠ node out of memory** — container hit its own `limits.memory` ceiling
+18. **`crictl` not `docker`** — Docker removed from modern k8s; use `crictl ps/logs/inspect`
+19. **`namespaceSelector` uses labels, not names** — use `kubernetes.io/metadata.name: <ns>` label
+20. **PVC `storageClassName` is immutable** — delete and recreate PVC if wrong, you can't edit it
+21. **ResourceQuota active → all pods need requests + limits** — forgetting this = instant pod rejection
+22. **Released PV ≠ Available** — must clear `claimRef` before it can rebind
+23. **SA binding syntax** — `--serviceaccount=<ns>:<name>` not `--user=<sa-name>`
+24. **Static pod backup** — always `cp /etc/kubernetes/manifests/<name>.yaml /tmp/` before editing
