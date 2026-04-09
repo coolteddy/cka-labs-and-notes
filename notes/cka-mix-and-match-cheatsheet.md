@@ -71,6 +71,20 @@ kubectl run tmp --image=busybox --restart=Never --rm -i -- \
   wget -qO- --timeout=5 http://api-svc.api-prod.svc.cluster.local
 ```
 
+**Useful DNS patterns to remember:**
+- Service FQDN:
+  - `service.namespace.svc.cluster.local`
+- Pod dashed-IP DNS:
+  - `podip-with-dashes.namespace.pod.cluster.local`
+  - example: `172-17-2-5.default.pod.cluster.local`
+- StatefulSet Pod via headless Service:
+  - `podname.headless-service.namespace.svc.cluster.local`
+  - example: `web-0.nginx.default.svc.cluster.local`
+
+**Exam note:**
+- Use Service DNS for normal app access.
+- Pod DNS by dashed IP can work, but do not rely on the shorter `podip.namespace` form unless you verify it in the cluster.
+
 ### CoreDNS Troubleshooting
 
 ```bash
