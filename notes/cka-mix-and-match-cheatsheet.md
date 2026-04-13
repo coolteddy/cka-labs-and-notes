@@ -17,6 +17,27 @@ kns() { kubectl config set-context --current --namespace="$1"; }
 kubectl config view --minify | grep namespace
 ```
 
+### Context Switching
+
+```bash
+# Show contexts
+kubectl config get-contexts
+kubectl config current-context
+
+# Switch to another context
+kubectl config use-context cluster3
+
+# Change namespace on current context
+kubectl config set-context --current --namespace=kube-system
+
+# Run one command against another context without switching permanently
+kubectl get pods --context=cluster4 -A
+```
+
+**Memory trick:**
+- `use-context` = move to it
+- `set-context` = edit it
+
 ---
 
 ## Services & Networking
@@ -56,6 +77,51 @@ kubectl edit svc <svc> -n <ns>
 - `connection refused` → wrong `targetPort` or app not listening on that port
 - `timeout` → NetworkPolicy blocking, wrong selector, or no endpoints
 
+### Service Without Selector + Manual EndpointSlice
+
+Use this when the backend is **not a Pod**, for example an external host/IP.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-webserver
+  namespace: kube-public
+spec:
+  ports:
+  - name: http
+    port: 80
+    targetPort: 9999
+
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: external-webserver-1
+  namespace: kube-public
+  labels:
+    kubernetes.io/service-name: external-webserver
+    endpointslice.kubernetes.io/managed-by: staff
+addressType: IPv4
+ports:
+- name: http
+  protocol: TCP
+  port: 9999
+endpoints:
+- addresses:
+  - 10.244.222.57
+  conditions:
+    ready: true
+```
+
+**Gotchas:**
+- Service must have **no selector**
+- `kubernetes.io/service-name` label must match the Service name
+- Service port name and EndpointSlice port name should match
+- EndpointSlice name itself can be anything unique
+- Pod resolves the **Service name** to ClusterIP; kube-proxy forwards to the EndpointSlice IP:port
+- `ExternalName` is different: use it for DNS aliasing, not forwarding to an external IP:port
+
 ### DNS
 
 ```bash
@@ -84,6 +150,25 @@ kubectl run tmp --image=busybox --restart=Never --rm -i -- \
 **Exam note:**
 - Use Service DNS for normal app access.
 - Pod DNS by dashed IP can work, but do not rely on the shorter `podip.namespace` form unless you verify it in the cluster.
+- For cross-namespace access, use at least `service.namespace`, or safest: `service.namespace.svc.cluster.local`
+- BusyBox `nslookup` can be misleading; trust actual connectivity tests like `wget`/`curl` if FQDN access works
+
+### Name Resolution Helpers
+
+```bash
+# Query system NSS database for host resolution
+getent hosts student-node
+
+# Show local host IPs
+hostname -I
+
+# Show preferred source IP used for outbound traffic
+ip route get 1.1.1.1
+```
+
+**Notes:**
+- `getent` queries OS lookup databases through NSS (`/etc/nsswitch.conf`)
+- `hosts` database can resolve via `/etc/hosts`, DNS, or other configured sources
 
 ### CoreDNS Troubleshooting
 
@@ -351,6 +436,12 @@ volumes:
 
 **Gotcha:** `tail -f <file>` crashes if file doesn't exist yet. Always `touch` the file first.
 
+**Shared `emptyDir` mental model:**
+- same Pod only
+- same underlying volume
+- containers can mount it at **different paths** and still see the same files
+- example: `/log/app.log` in one container can be `/usr/share/nginx/html/app.log` in another
+
 ### Multi-Container Pod
 
 ```bash
@@ -429,6 +520,15 @@ spec:
 
 **Tip:** Use `kubectl explain` to check structure. `[]` in output = list, no `[]` = single object.
 
+### DaemonSet Toleration Shortcut
+
+```yaml
+tolerations:
+- operator: Exists
+```
+
+Useful for DaemonSets that should run on broadly tainted nodes, including control-plane nodes. It is a broad toleration shortcut.
+
 ### HPA
 
 ```bash
@@ -458,6 +558,139 @@ behavior:
 ```
 
 `behavior` → `scaleDown`/`scaleUp` → `stabilizationWindowSeconds` — three levels deep.
+
+**Version gotcha:**
+- `kubectl autoscale` may try `autoscaling/v2` first, but can still fall back to `autoscaling/v1`
+- `autoscaling/v1` uses:
+  ```yaml
+  targetCPUUtilizationPercentage: 65
+  ```
+- `autoscaling/v2` uses:
+  ```yaml
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 65
+  ```
+- `behavior` works only in `autoscaling/v2`
+- Exam-safe rule: for advanced HPA questions, write `autoscaling/v2` manually
+
+**Advanced HPA (`autoscaling/v2`) examples:**
+
+```yaml
+# CPU + behavior
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: cka0841
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend-deployment
+  minReplicas: 3
+  maxReplicas: 15
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  behavior:
+    scaleDown:
+      selectPolicy: Min
+      policies:
+      - type: Pods
+        value: 5
+        periodSeconds: 60
+      - type: Percent
+        value: 20
+        periodSeconds: 60
+```
+
+```yaml
+# Pods custom metric
+metrics:
+- type: Pods
+  pods:
+    metric:
+      name: requests_per_second
+    target:
+      type: AverageValue
+      averageValue: "1000"
+```
+
+```yaml
+# Object custom metric
+metrics:
+- type: Object
+  object:
+    describedObject:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      name: web-ingress
+    metric:
+      name: requests_per_second
+    target:
+      type: Value
+      value: "2000"
+```
+
+**HPA behavior notes:**
+- `selectPolicy: Min` = use the smallest allowed change
+- `selectPolicy: Max` = use the largest allowed change
+- Default policy selection behaves like `Max`
+- Default stabilization windows commonly seen:
+  - `scaleUp.stabilizationWindowSeconds: 0`
+  - `scaleDown.stabilizationWindowSeconds: 300`
+- `stabilizationWindowSeconds` smooths scaling decisions and helps avoid flapping
+
+**Custom metrics mental model:**
+- `Resource` = CPU/memory
+- `Pods` = metric per pod, usually `AverageValue`
+- `Object` = metric on one K8s object, usually `Value`
+- `External` = metric outside Kubernetes
+- HPA does **not** read Prometheus directly:
+  `Prometheus -> prometheus-adapter -> custom.metrics/external.metrics API -> HPA`
+
+### VPA
+
+**Install note:** CRD alone is not enough. VPA needs:
+- recommender
+- updater
+- admission-controller
+
+```bash
+kubectl get pods -n kube-system | grep vpa
+kubectl get vpa -A
+```
+
+**`Initial` mode gotchas:**
+- `Initial` only applies recommendations to **new Pods**
+- if `CPU`/`MEM` columns are empty, VPA has no recommendation yet
+- restarting workload before recommendation exists does nothing
+- if the question only asks to create the VPA, you usually do not need to restart anything
+- if recommendation appears and task wants it applied, recreate/restart the Pods
+
+```yaml
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: cache-vpa
+  namespace: caching
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: cache-statefulset
+  updatePolicy:
+    updateMode: Initial
+```
 
 ### PodDisruptionBudget
 
@@ -702,6 +935,8 @@ allowVolumeExpansion: true
 
 **`WaitForFirstConsumer`** — PVC stays `Pending` until a pod using it is created. Expected behaviour.
 
+**Important nuance:** if a PVC sets `volumeName` to a specific PV, binding can still succeed without creating a consumer pod, as long as the rest of the PV/PVC fields match.
+
 **Set StorageClass as default:**
 ```yaml
 metadata:
@@ -753,6 +988,66 @@ kubectl exec -n <ns> <pod> -- df -h /data
 - Check endpoints are populated before debugging the pod
 - PVCs from StatefulSet `volumeClaimTemplates` are NOT deleted with the StatefulSet
 
+### PV/PVC Matching Extras
+
+**PVC can constrain matching with all of these at once:**
+- `storageClassName`
+- `accessModes`
+- requested capacity `<=` PV capacity
+- `volumeMode`
+- `selector.matchLabels` against PV labels
+- `volumeName` for a specific PV
+
+**Selector belongs on PVC, not PV:**
+```yaml
+# PV
+metadata:
+  labels:
+    storage-tier: gold
+
+# PVC
+spec:
+  selector:
+    matchLabels:
+      storage-tier: gold
+```
+
+**Force a specific PV:**
+```yaml
+spec:
+  storageClassName: ""
+  volumeName: peach-pv-cka05-str
+```
+
+**Notes:**
+- `selector` on a PV is invalid
+- `volumeName` on PVC points to an exact PV
+- if PVC uses both `volumeName` and `selector`, the chosen PV must satisfy both
+- omitting `volumeName` lets Kubernetes choose any suitable PV
+- for PVs with empty storage class, safest PVC form is `storageClassName: ""`
+
+**Released PV recovery (`Retain` policy):**
+```bash
+kubectl patch pv peach-pv-cka05-str --type=json -p='[{"op":"remove","path":"/spec/claimRef"}]'
+```
+
+`Released` usually means the old `claimRef` is still present. Remove it to make the PV reusable.
+
+**Node-specific PVs:**
+```yaml
+spec:
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - cluster1-controlplane
+```
+
+Use `kubectl describe pv <name>` or `kubectl get pv <name> -o yaml` to verify the node affinity.
+
 ---
 
 ## Diagnostic Toolkit
@@ -800,6 +1095,32 @@ kubectl run tmp --image=busybox --restart=Never --rm -i -- \
 kubectl auth can-i list pods -n <ns> --as=system:serviceaccount:<ns>:<sa-name>
 kubectl auth can-i create deployments --as=alice
 ```
+
+### Preview Changes
+
+```bash
+kubectl diff -f file.yaml
+```
+
+Shows what `kubectl apply -f file.yaml` would change, without applying it. Useful before recreating or replacing broken objects.
+
+### Optional `yq`
+
+```bash
+# Read field
+yq '.metadata.name' file.yaml
+
+# Edit in place
+yq -i '.spec.replicas = 3' file.yaml
+
+# Delete field
+yq -i 'del(.status)' file.yaml
+
+# Inspect kubectl YAML
+kubectl get pod x -o yaml | yq '.status.phase'
+```
+
+Nice to have, not required for CKA.
 
 ### ResourceQuota
 
@@ -924,6 +1245,73 @@ kubectl get svc -n <ns>   # look for <gateway-name>-nginx NodePort service
 ```
 
 **Verify:** `curl -H 'Host: gateway.web.k8s.local' http://<node-ip>:<nodeport>`
+
+### HTTPRoute Patterns
+
+**Weighted traffic split:**
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web-portal-httproute
+  namespace: cka3658
+spec:
+  parentRefs:
+  - name: nginx-gateway
+    namespace: nginx-gateway
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: web-portal-service-v1
+      port: 80
+      weight: 80
+    - name: web-portal-service-v2
+      port: 80
+      weight: 20
+```
+
+**Header-based canary route:**
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web-app-route
+  namespace: ck2145
+spec:
+  parentRefs:
+  - name: nginx-gateway
+    namespace: nginx-gateway
+  rules:
+  - matches:
+    - headers:
+      - name: X-Environment
+        value: canary
+    backendRefs:
+    - name: web-service-canary
+      port: 8080
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: web-service
+      port: 8080
+```
+
+**HTTPRoute notes:**
+- `hostnames` is optional; if omitted, route is not restricted by Host header
+- `hostnames` matches the HTTP `Host` header
+- `headers` matches other headers, for example `X-Environment: canary`
+- if one `match` contains both `path` and `headers`, both must match
+- multiple header entries in one match are ANDed
+- put the most specific rule first for clarity
+- test header routes with:
+  ```bash
+  curl -H 'X-Environment: canary' http://localhost:30080
+  ```
 
 ---
 
