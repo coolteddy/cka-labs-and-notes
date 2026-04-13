@@ -1,0 +1,7 @@
+namePrefix: dev-
+labels:
+  - pairs:
+      app: my-nginx
+    includeSelectors: true 
+resources:
+- deployment.yaml

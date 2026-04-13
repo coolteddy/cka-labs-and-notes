@@ -1,0 +1,5 @@
+resources:
+- deployment.yaml
+patches:
+  - path: increase_replicas.yaml
+  - path: set_memory.yaml
