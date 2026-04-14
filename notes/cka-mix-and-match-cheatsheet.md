@@ -2006,7 +2006,7 @@ kubectl get pods -A
 
 ## vim Tips
 
-```bash
+```text
 # Add to ~/.vimrc (one line)
 set ts=2 sw=2 et
 
@@ -2019,38 +2019,38 @@ set ts=2 sw=2 et
 kubectl run pod1 --image=nginx --dry-run=client -o yaml > pod1.yaml
 cp pod1.yaml pod2.yaml
 vi pod2.yaml
+
+Movement
+h left, j down, k up, l right
+w next word, b previous word
+0 line start, $ line end
+gg file top, G file bottom
+
+Insert / edit
+i insert before cursor
+a insert after cursor
+o new line below
+O new line above
+Esc back to normal mode
+
+Delete
+x delete character under cursor
+dw delete forward one word
+db delete backward one word
+de delete to end of word
+dd delete whole line
+D delete from cursor to end of line
+
+Undo / paste
+u undo
+Ctrl-r redo
+yy yank line
+p paste after cursor
+P paste before cursor
+
+Save / quit
+:w save
+:q quit
+:wq save and quit
+:q! quit without saving
 ```
-
-**Movement:**
-- `h` left, `j` down, `k` up, `l` right
-- `w` next word, `b` previous word
-- `0` line start, `$` line end
-- `gg` file top, `G` file bottom
-
-**Insert / edit:**
-- `i` insert before cursor
-- `a` insert after cursor
-- `o` new line below
-- `O` new line above
-- `Esc` back to normal mode
-
-**Delete:**
-- `x` delete character under cursor
-- `dw` delete forward one word
-- `db` delete backward one word
-- `de` delete to end of word
-- `dd` delete whole line
-- `D` delete from cursor to end of line
-
-**Undo / paste:**
-- `u` undo
-- `Ctrl-r` redo
-- `yy` yank line
-- `p` paste after cursor
-- `P` paste before cursor
-
-**Save / quit:**
-- `:w` save
-- `:q` quit
-- `:wq` save and quit
-- `:q!` quit without saving
