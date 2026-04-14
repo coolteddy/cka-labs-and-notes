@@ -10,8 +10,13 @@ Covers domains: Services & Networking (20%), Workloads & Scheduling (15%), Stora
 # vim settings — add to ~/.vimrc
 set ts=2 sw=2 et
 
-# Namespace shortcut
-kns() { kubectl config set-context --current --namespace="$1"; }
+# Session helpers — paste after each ssh if needed
+kns(){ kubectl config set-context --current --namespace="$1"; }
+kctx(){ kubectl config current-context; }
+kg(){ kubectl get "$@"; }
+kdes(){ kubectl describe "$@"; }
+kl(){ kubectl logs "$@"; }
+kdr(){ kubectl "$@" --dry-run=client -o yaml; }
 
 # Check current namespace
 kubectl config view --minify | grep namespace
@@ -2015,3 +2020,37 @@ kubectl run pod1 --image=nginx --dry-run=client -o yaml > pod1.yaml
 cp pod1.yaml pod2.yaml
 vi pod2.yaml
 ```
+
+**Movement:**
+- `h` left, `j` down, `k` up, `l` right
+- `w` next word, `b` previous word
+- `0` line start, `$` line end
+- `gg` file top, `G` file bottom
+
+**Insert / edit:**
+- `i` insert before cursor
+- `a` insert after cursor
+- `o` new line below
+- `O` new line above
+- `Esc` back to normal mode
+
+**Delete:**
+- `x` delete character under cursor
+- `dw` delete forward one word
+- `db` delete backward one word
+- `de` delete to end of word
+- `dd` delete whole line
+- `D` delete from cursor to end of line
+
+**Undo / paste:**
+- `u` undo
+- `Ctrl-r` redo
+- `yy` yank line
+- `p` paste after cursor
+- `P` paste before cursor
+
+**Save / quit:**
+- `:w` save
+- `:q` quit
+- `:wq` save and quit
+- `:q!` quit without saving
