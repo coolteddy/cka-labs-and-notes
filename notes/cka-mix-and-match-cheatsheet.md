@@ -20,6 +20,16 @@ kdr(){ kubectl "$@" --dry-run=client -o yaml; }
 
 # Check current namespace
 kubectl config view --minify | grep namespace
+
+# Package version troubleshooting on Ubuntu/Debian nodes
+sudo apt update
+apt-cache policy kubeadm
+apt-cache policy kubelet
+apt-cache policy kubectl
+apt list -a kubeadm
+apt list -a kubelet
+apt list -a kubectl
+apt list --upgradable
 ```
 
 ### Context Switching
@@ -145,6 +155,9 @@ kubectl run tmp --image=busybox --restart=Never --rm -i -- \
 **Useful DNS patterns to remember:**
 - Service FQDN:
   - `service.namespace.svc.cluster.local`
+- Pod with `hostname` + `subdomain`:
+  - `<hostname>.<subdomain>.<namespace>.svc.cluster.local`
+  - example: `section100.section.default.svc.cluster.local`
 - Pod dashed-IP DNS:
   - `podip-with-dashes.namespace.pod.cluster.local`
   - example: `172-17-2-5.default.pod.cluster.local`
@@ -154,6 +167,7 @@ kubectl run tmp --image=busybox --restart=Never --rm -i -- \
 
 **Exam note:**
 - Use Service DNS for normal app access.
+- Pod-specific `hostname.subdomain.ns.svc.cluster.local` requires a Service whose name matches the `subdomain`. For stable per-Pod DNS, use a headless Service.
 - Pod DNS by dashed IP can work, but do not rely on the shorter `podip.namespace` form unless you verify it in the cluster.
 - For cross-namespace access, use at least `service.namespace`, or safest: `service.namespace.svc.cluster.local`
 - BusyBox `nslookup` can be misleading; trust actual connectivity tests like `wget`/`curl` if FQDN access works
@@ -475,6 +489,25 @@ spec:
     command: ["sh", "-c", "while true; do echo logging; sleep 5; done"]
 ```
 
+**High-value shapes to remember:**
+- Pod name via downward API:
+  ```yaml
+  fieldRef:
+    fieldPath: metadata.name
+  ```
+- Node name via downward API:
+  ```yaml
+  fieldRef:
+    fieldPath: spec.nodeName
+  ```
+- Shared per-Pod scratch volume:
+  ```yaml
+  volumes:
+  - name: shared
+    emptyDir: {}
+  ```
+- If the question says a shared volume is mounted into each container, verify all containers have `volumeMounts`.
+
 ### Scheduling — nodeSelector vs nodeAffinity
 
 | | nodeSelector | nodeAffinity |
@@ -525,6 +558,20 @@ spec:
 
 **Tip:** Use `kubectl explain` to check structure. `[]` in output = list, no `[]` = single object.
 
+**Syntax memory:**
+- `nodeSelector` = plain map only
+  ```yaml
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+  ```
+- `nodeAffinity` = `nodeSelectorTerms` + `matchExpressions`
+- `matchLabels` = simple `key: value`
+- `matchExpressions` = `key`, `operator`, optional/required `values`
+
+**Operator rule:**
+- `In`, `NotIn`, `Gt`, `Lt` -> use `values`
+- `Exists`, `DoesNotExist` -> do not use `values`
+
 ### DaemonSet Toleration Shortcut
 
 ```yaml
@@ -533,6 +580,26 @@ tolerations:
 ```
 
 Useful for DaemonSets that should run on broadly tainted nodes, including control-plane nodes. It is a broad toleration shortcut.
+
+**Control-plane-only pod pattern (kubeadm-style):**
+- Restrict to control-plane nodes:
+  ```yaml
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: node-role.kubernetes.io/control-plane
+            operator: Exists
+  ```
+- Also tolerate the taint:
+  ```yaml
+  tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+  ```
+- `nodeName` pins to one exact node. It does not express a scheduling rule.
 
 ### HPA
 
@@ -861,6 +928,15 @@ helm get manifest web-release -n <ns>
 helm template web-release bitnami/nginx --set replicaCount=2
 ```
 
+**Fast memory:**
+- list repos:
+  ```bash
+  helm repo list
+  ```
+- repo already exists and install works -> `helm repo update` is optional
+- `helm search repo` searches added repos
+- `helm search hub` is slower discovery; use only if you do not know the repo yet
+
 ---
 
 ## Storage
@@ -918,12 +994,71 @@ spec:
 ```
 Check PV details first: `kubectl get pv <name> -o yaml` — match accessModes and storageClassName. PVC request must be **≤ PV capacity** (not necessarily equal).
 
+**Default vs manual habit:**
+- Default StorageClass + dynamic provisioning:
+  - omit `storageClassName`
+  - do not create a PV manually
+- Manual PV/PVC binding:
+  - set `storageClassName: ""`
+  - optionally pin with `volumeName: <pv-name>` for exam-safe explicit binding
+- If a task creates a StorageClass with `provisioner:`, think dynamic provisioning first.
+
 **Diagnose PVC stuck Pending:**
 ```bash
 kubectl describe pvc <name> -n <ns>
 # Check: Events — usually "no persistent volumes available" or "storageClass mismatch"
 kubectl get pv   # check PV status and storageClassName
 ```
+
+### `hostPath` vs `local`
+
+```yaml
+# hostPath PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: hostpath-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+  - ReadWriteOnce
+  hostPath:
+    path: /data/hostpath-demo
+
+---
+# local PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+  - ReadWriteOnce
+  local:
+    path: /data/local-demo
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - worker-node-name
+```
+
+**Mental model:**
+- `hostPath` = simple host filesystem path mount on whichever node the Pod runs
+- `local` = node-bound local disk PV, must declare ownership with `nodeAffinity`
+- If the question says `hostPath`, use `hostPath` — do not switch to `local`
+- Both point at real node filesystem paths; deleting the Pod/PV object does not automatically remove host files
+- `hostPath.type` is mount-time behaviour:
+  - omitted = use path as-is
+  - `Directory` = path must already exist
+  - `DirectoryOrCreate` = create directory if missing when mounted
+- `persistentVolumeReclaimPolicy` can be set on both, but it does not usually delete raw node directories for `hostPath`/`local`
 
 ### StorageClass
 
@@ -1101,6 +1236,16 @@ kubectl auth can-i list pods -n <ns> --as=system:serviceaccount:<ns>:<sa-name>
 kubectl auth can-i create deployments --as=alice
 ```
 
+**Memory trick:**
+- `RoleBinding --serviceaccount` format: `<namespace>:<sa-name>`
+- `kubectl auth can-i --as` for ServiceAccount: `system:serviceaccount:<namespace>:<sa-name>`
+- For namespaced RBAC checks, include `-n <ns>`
+- If resources belong to different API groups in raw YAML, split them into separate `rules:` entries.
+
+**Common API group mapping:**
+- core resources like `pods`, `configmaps`, `secrets` -> `apiGroups: [""]`
+- `deployments`, `daemonsets`, `statefulsets` -> `apiGroups: ["apps"]`
+
 ### Preview Changes
 
 ```bash
@@ -1135,6 +1280,19 @@ kubectl create quota my-quota -n <ns> \
 
 kubectl describe resourcequota my-quota -n <ns>
 ```
+
+### Probe Defaults
+
+**High-value memory:**
+- `timeoutSeconds: 1`
+- `periodSeconds: 10`
+- `failureThreshold: 3`
+- `successThreshold: 1`
+- `initialDelaySeconds: 0`
+
+**Practice rule:**
+- If using `exec` with `wget`, `curl`, or shell logic, default `timeoutSeconds: 1` is often too short.
+- If the prompt gives a shell command, prefer `exec` over forcing `httpGet`.
 
 ---
 
@@ -1186,6 +1344,7 @@ kubectl describe resourcequota my-quota -n <ns>
 | `kubectl apply -k` vs `kubectl kustomize` | `apply -k` deploys; `kustomize` only renders. They are not interchangeable |
 | `--as=<sa-name>` for ServiceAccount | Use `--as=system:serviceaccount:<ns>:<name>`. Bare name creates a User binding |
 | ClusterRoleBinding vs RoleBinding + ClusterRole | ClusterRoleBinding = cluster-wide access. RoleBinding + ClusterRole = namespace-scoped access |
+| `kubectl auth can-i` missing `-n` | Namespaced Role/RoleBinding checks can look wrong without `-n <ns>` |
 | etcd restore partial manifest update | Must update `--data-dir`, `mountPath`, AND `hostPath.path` — all three must match |
 | `kubeadm certs renew` without restart | New certs on disk but components still use old in-memory certs. Always restart kubelet after |
 | `readOnlyRootFilesystem: true` breaks /tmp writes | Mount an `emptyDir` at `/tmp` for apps that need a writable temp dir |
@@ -1354,6 +1513,60 @@ data:
 ```
 
 **Gotcha:** Once `immutable: true` is set, any edit attempt is rejected: `field is immutable when immutable is set`. To change values you must delete and recreate the ConfigMap, then restart pods.
+
+**ConfigMap env / volume shapes:**
+- Inject all keys as env vars:
+  ```yaml
+  envFrom:
+  - configMapRef:
+      name: app-config
+  ```
+- Inject one key to one env var:
+  ```yaml
+  env:
+  - name: APP_MODE
+    valueFrom:
+      configMapKeyRef:
+        name: app-config
+        key: mode
+  ```
+- Mount as volume:
+  ```yaml
+  volumes:
+  - name: cfg
+    configMap:
+      name: app-config
+  ```
+- Mounted ConfigMap path is a directory; keys become files inside it.
+
+**Secret env / volume shapes:**
+- Inject all keys as env vars:
+  ```yaml
+  envFrom:
+  - secretRef:
+      name: app-secret
+  ```
+- Inject one key to one env var:
+  ```yaml
+  env:
+  - name: APP_PASS
+    valueFrom:
+      secretKeyRef:
+        name: app-secret
+        key: password
+  ```
+- Mount as volume:
+  ```yaml
+  volumes:
+  - name: sec
+    secret:
+      secretName: app-secret
+  ```
+- Secret mount path is a directory; keys become files inside it.
+- If the question says the Secret mount is read-only, add:
+  ```yaml
+  readOnly: true
+  ```
 
 ---
 
@@ -1825,6 +2038,55 @@ kubectl auth can-i --list --as=alice -n <ns>    # show everything alice can do
 
 **Gotcha:** A `ClusterRoleBinding` gives cluster-wide access. A `RoleBinding` referencing a `ClusterRole` gives access only in that namespace.
 
+### In-Pod API Curl with ServiceAccount
+
+```bash
+# Files mounted automatically when Pod uses a ServiceAccount
+/var/run/secrets/kubernetes.io/serviceaccount/token
+/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+/var/run/secrets/kubernetes.io/serviceaccount/namespace
+
+# Create ConfigMap through Kubernetes API from inside a Pod, write response on host
+kubectl exec -n rbac-lab api-check -- sh -c '
+APISERVER=https://kubernetes.default.svc
+SERVICEACCOUNT=/var/run/secrets/kubernetes.io/serviceaccount
+NAMESPACE=$(cat ${SERVICEACCOUNT}/namespace)
+TOKEN=$(cat ${SERVICEACCOUNT}/token)
+CACERT=${SERVICEACCOUNT}/ca.crt
+curl --cacert "${CACERT}" \
+  --header "Authorization: Bearer ${TOKEN}" \
+  --header "Content-Type: application/json" \
+  -X POST "${APISERVER}/api/v1/namespaces/${NAMESPACE}/configmaps" \
+  -d '"'"'{
+    "apiVersion":"v1",
+    "kind":"ConfigMap",
+    "metadata":{"name":"api-created"},
+    "data":{"source":"api"}
+  }'"'"'
+' > /tmp/rbac-create-configmap.json
+```
+
+**Notes:**
+- `>` must stay outside `kubectl exec ... sh -c '...'` if the file should be written on the host
+- For Secrets, `data` values must be base64-encoded strings
+- Multi-line `curl` inside `sh -c` needs `\` line continuations
+
+**Quote timeline (`'"'"'"'"'"'"'"'"'`):**
+```text
+What you type:
+sh -c 'curl ... -d '"'"'hello'"'"''
+
+Shell pieces:
+'curl ... -d '   -> curl ... -d
+"'"              -> '
+'hello'          -> hello
+"'"              -> '
+''               -> nothing
+
+Final reconstructed text:
+curl ... -d 'hello'
+```
+
 ---
 
 ## kubectl rollout — Full Reference
@@ -1964,6 +2226,46 @@ ETCDCTL_API=3 etcdctl snapshot restore /opt/backup/etcd.db \
 
 **Gotcha:** Missing any one of the three manifest updates causes etcd to start with the old data directory and ignore the restore.
 
+**Version check habit:**
+- If etcd runs as a static Pod, get the version from the running etcd Pod:
+  ```bash
+  kubectl -n kube-system exec etcd-<node> -- etcd --version
+  ```
+- Do not install host packages just to answer a running-component version question.
+
+## Kubelet Config / Cert Locations
+
+```bash
+# Kubelet client kubeconfig
+/etc/kubernetes/kubelet.conf
+
+# Kubelet config
+/var/lib/kubelet/config.yaml
+
+# Kubelet cert directory
+/var/lib/kubelet/pki
+```
+
+**Common files:**
+- client cert:
+  - `/var/lib/kubelet/pki/kubelet-client-current.pem`
+- server cert commonly:
+  - `/var/lib/kubelet/pki/kubelet.crt`
+- server key:
+  - `/var/lib/kubelet/pki/kubelet.key`
+
+**Inspect cert details:**
+```bash
+sudo openssl x509 -in /var/lib/kubelet/pki/kubelet-client-current.pem -noout -text
+sudo openssl x509 -in /var/lib/kubelet/pki/kubelet.crt -noout -text
+```
+
+**Mental model:**
+- kubelet client cert = outgoing kubelet -> kube-apiserver
+- kubelet server cert = incoming connections to kubelet
+- `Extended Key Usage` confirms the role:
+  - client auth vs server auth
+
 ---
 
 ## kubectl Output Formatting
@@ -2054,3 +2356,26 @@ Save / quit
 :wq save and quit
 :q! quit without saving
 ```
+
+**YAML paste recovery:**
+```vim
+:set list
+:set expandtab
+:retab
+:set nolist
+```
+- `:set list` shows hidden chars (`^I` = tab)
+- `:set expandtab` makes typed tabs become spaces
+- `:retab` converts existing tabs to spaces
+- `:set nolist` hides markers again
+
+### Shell Counting Pattern
+
+```bash
+kubectl get roles -A --no-headers | awk '{print $1}' | sort | uniq -c | sort -nr
+```
+
+**Meaning:**
+- plain `sort` first groups identical lines together
+- `uniq -c` counts adjacent duplicates
+- `sort -nr` after that sorts by numeric count descending
