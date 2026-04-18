@@ -2369,6 +2369,20 @@ Save / quit
 - `:retab` converts existing tabs to spaces
 - `:set nolist` hides markers again
 
+**Shift blocks quickly:**
+```vim
+V        " visual line select
+j / k    " expand selection
+>        " indent selected block one shiftwidth
+<        " unindent selected block one shiftwidth
+
+5>>      " indent current line + next 4 lines
+5<<      " unindent current line + next 4 lines
+```
+- `V` then `j`/`k` is useful when you want to move a block elsewhere first
+- `5>>` / `5<<` is faster when you already know roughly how many lines must shift
+- `5>>` / `5<<` works without visual selection
+
 ### Shell Counting Pattern
 
 ```bash
