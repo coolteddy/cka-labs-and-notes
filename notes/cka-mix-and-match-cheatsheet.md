@@ -1371,7 +1371,7 @@ kubectl set serviceaccount deployment/<name> <sa-name>
 ## Gateway API
 
 ```yaml
-# 1. Create Gateway
+# 1. Create Gateway (HTTP)
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -1386,6 +1386,27 @@ spec:
     hostname: gateway.web.k8s.local
 
 ---
+# 1b. Create Gateway (HTTPS with TLS)
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-gateway
+  namespace: <ns>
+spec:
+  gatewayClassName: nginx
+  listeners:
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: myapp.local
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        group: ""
+        name: myapp-tls           # must be in same namespace as Gateway
+
+---
 # 2. Create HTTPRoute
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -1394,7 +1415,7 @@ metadata:
   namespace: <ns>
 spec:
   parentRefs:
-  - name: web-gateway
+  - name: web-gateway            # or tls-gateway for HTTPS
   hostnames:
   - gateway.web.k8s.local
   rules:
@@ -1408,7 +1429,30 @@ spec:
 kubectl get svc -n <ns>   # look for <gateway-name>-nginx NodePort service
 ```
 
-**Verify:** `curl -H 'Host: gateway.web.k8s.local' http://<node-ip>:<nodeport>`
+**Test HTTP:** `curl -H 'Host: gateway.web.k8s.local' http://<node-ip>:<nodeport>`
+
+**Test HTTPS — must use `--resolve`, NOT `-H 'Host:'`:**
+```bash
+# Gateway API is strict about SNI — -H 'Host:' sets HTTP header but NOT TLS SNI
+# --resolve sets both SNI and Host correctly
+curl --resolve myapp.local:<nodeport>:127.0.0.1 https://myapp.local:<nodeport> -k
+```
+
+**Why `--resolve` and not `-H 'Host:'`:**
+- TLS SNI is sent before HTTP headers during the handshake
+- Gateway selects the certificate based on SNI, not Host header
+- If SNI = `localhost` but cert is for `myapp.local`, Gateway rejects with `tlsv1 unrecognized name`
+- `--resolve host:port:ip` makes curl connect to the IP but use the hostname for SNI + Host header
+
+**TLS Secret for Gateway:**
+```bash
+# Create self-signed cert
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout tls.key -out tls.crt -subj "/CN=myapp.local/O=myapp"
+
+# Create secret in same namespace as Gateway
+kubectl create secret tls myapp-tls --cert=tls.crt --key=tls.key -n <ns>
+```
 
 ### HTTPRoute Patterns
 

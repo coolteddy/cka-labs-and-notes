@@ -64,11 +64,30 @@ EOF
 
 sudo sysctl --system
 
-# Install containerd
+# Install containerd (apt method — quick)
 sudo apt-get update -y
 sudo apt-get install -y containerd
 
-# Configure containerd with systemd cgroup driver
+# --- OR --- Install containerd from GitHub (exam method — shows full picture)
+curl -LO https://github.com/containerd/containerd/releases/download/v2.2.3/containerd-2.2.3-linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf containerd-2.2.3-linux-amd64.tar.gz
+
+# systemd service
+curl -LO https://raw.githubusercontent.com/containerd/containerd/main/containerd.service
+sudo mv containerd.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now containerd
+
+# runc (low-level container executor — containerd calls out to this)
+curl -LO https://github.com/opencontainers/runc/releases/download/v1.2.6/runc.amd64
+sudo install -m 755 runc.amd64 /usr/local/sbin/runc
+
+# CNI plugins (base network plugins used by Calico/Flannel as building blocks)
+curl -LO https://github.com/containernetworking/plugins/releases/download/v1.6.2/cni-plugins-linux-amd64-v1.6.2.tgz
+sudo mkdir -p /opt/cni/bin
+sudo tar -C /opt/cni/bin -xzf cni-plugins-linux-amd64-v1.6.2.tgz
+
+# Configure containerd with systemd cgroup driver (both methods need this)
 sudo mkdir -p /etc/containerd
 containerd config default | sudo tee /etc/containerd/config.toml
 sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
