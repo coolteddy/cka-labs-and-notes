@@ -7,9 +7,6 @@ Covers domains: Services & Networking (20%), Workloads & Scheduling (15%), Stora
 ## Quick Setup
 
 ```bash
-# vim settings — add to ~/.vimrc
-set ts=2 sw=2 et
-
 # Session helpers — paste after each ssh if needed
 kns(){ kubectl config set-context --current --namespace="$1"; }
 kctx(){ kubectl config current-context; }
@@ -2348,84 +2345,17 @@ kubectl get pods -l 'env notin (dev)'
 kubectl get pods -A
 ```
 
----
+### ResourceQuota vs LimitRange — Quick Reference
 
-## vim Tips
+| | ResourceQuota | LimitRange |
+|---|---|---|
+| Scope | Whole namespace total | Per container/pod/PVC |
+| Purpose | Cap aggregate usage | Defaults + bounds per resource |
+| Blocks pod? | Yes, if namespace over budget | Yes, if outside min/max |
+| Mutates pod? | No | Yes — injects default/defaultRequest |
 
-```text
-# Add to ~/.vimrc (one line)
-set ts=2 sw=2 et
-
-# In vi — paste without auto-indent mangling
-:set paste
-# paste your YAML
-:set nopaste
-
-# Generate base YAML, copy for variations
-kubectl run pod1 --image=nginx --dry-run=client -o yaml > pod1.yaml
-cp pod1.yaml pod2.yaml
-vi pod2.yaml
-
-Movement
-h left, j down, k up, l right
-w next word, b previous word
-0 line start, $ line end
-gg file top, G file bottom
-
-Insert / edit
-i insert before cursor
-a insert after cursor
-o new line below
-O new line above
-Esc back to normal mode
-
-Delete
-x delete character under cursor
-dw delete forward one word
-db delete backward one word
-de delete to end of word
-dd delete whole line
-D delete from cursor to end of line
-
-Undo / paste
-u undo
-Ctrl-r redo
-yy yank line
-p paste after cursor
-P paste before cursor
-
-Save / quit
-:w save
-:q quit
-:wq save and quit
-:q! quit without saving
-```
-
-**YAML paste recovery:**
-```vim
-:set list
-:set expandtab
-:retab
-:set nolist
-```
-- `:set list` shows hidden chars (`^I` = tab)
-- `:set expandtab` makes typed tabs become spaces
-- `:retab` converts existing tabs to spaces
-- `:set nolist` hides markers again
-
-**Shift blocks quickly:**
-```vim
-V        " visual line select
-j / k    " expand selection
->        " indent selected block one shiftwidth
-<        " unindent selected block one shiftwidth
-
-5>>      " indent current line + next 4 lines
-5<<      " unindent current line + next 4 lines
-```
-- `V` then `j`/`k` is useful when you want to move a block elsewhere first
-- `5>>` / `5<<` is faster when you already know roughly how many lines must shift
-- `5>>` / `5<<` works without visual selection
+- `cpu` shorthand in quota = `requests.cpu`
+- Always pair ResourceQuota with LimitRange so pods without requests/limits get defaults injected
 
 ### Shell Counting Pattern
 

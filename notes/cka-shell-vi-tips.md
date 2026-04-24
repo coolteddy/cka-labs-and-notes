@@ -80,6 +80,7 @@ This is useful when you want visible proof in logs and a file written at the sam
 
 ## vi Editing
 
+- `Esc`: return to normal mode
 - `i`: insert before cursor
 - `a`: insert after cursor
 - `o`: open new line below
@@ -104,6 +105,80 @@ Delete without overwriting your last yank:
 ```vim
 "_dd
 ```
+
+## vi Save and Quit
+
+- `:w`: save
+- `:q`: quit
+- `:wq`: save and quit
+- `:q!`: quit without saving
+
+## vi YAML Paste Recovery
+
+Recommended `~/.vimrc` line:
+
+```vim
+set ts=2 sw=2 et
+```
+
+Paste without auto-indent mangling:
+
+```vim
+:set paste
+" paste your YAML
+:set nopaste
+```
+
+Recover from tabs or hidden characters in YAML:
+
+```vim
+:set list
+:set expandtab
+:retab
+:set nolist
+```
+
+Notes:
+
+- `:set list` shows hidden characters like `^I` for tabs
+- `:set expandtab` makes typed tabs become spaces
+- `:retab` converts existing tabs to spaces
+- `:set nolist` hides the markers again
+
+## vi Block Indent
+
+Visual block shifting:
+
+```vim
+V
+j
+>
+```
+
+Or:
+
+```vim
+V
+k
+<
+```
+
+Direct line-count shifting without visual selection:
+
+```vim
+5>>
+5<<
+```
+
+Notes:
+
+- `V` starts visual line selection
+- `j` / `k` expands the selected block
+- `>` indents the selected block one shiftwidth
+- `<` unindents the selected block one shiftwidth
+- `5>>` indents the current line plus the next 4 lines
+- `5<<` unindents the current line plus the next 4 lines
+- `5>>` / `5<<` is faster when you already know roughly how many lines must shift
 
 ## vi Delete Patterns
 
