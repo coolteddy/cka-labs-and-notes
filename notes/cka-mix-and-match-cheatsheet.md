@@ -1812,6 +1812,18 @@ generatorOptions:
 
 **Gotcha:** `kubectl apply -k .` deploys. `kubectl kustomize .` only renders. They are not the same.
 
+**Built-in fields worth remembering first:**
+- `namespace`
+- `labels`
+- `images`
+- `replicas`
+- `resources`
+- `patches`
+
+**Targeting reminders:**
+- `replicas.name` means the workload resource name (for example Deployment `web`), not the container name
+- `images.name` matches the image reference broadly, so multiple resources using that image can be affected
+
 ---
 
 ## Jobs and CronJobs
@@ -2356,6 +2368,62 @@ kubectl get pods -A
 
 - `cpu` shorthand in quota = `requests.cpu`
 - Always pair ResourceQuota with LimitRange so pods without requests/limits get defaults injected
+
+### Requests, Limits, QoS, and Scheduling
+
+**Scheduling rules:**
+- Scheduler places Pods based on **requests**, not actual usage.
+- `limits` do not drive placement directly.
+- Use node **Allocatable**, not Capacity, for scheduling math.
+- If admission fails (`ResourceQuota`, `LimitRange`), the Pod may never be created; check ReplicaSet/Deployment events.
+- If admission passes but no node fits, the Pod exists and stays `Pending`; check `kubectl describe pod`.
+
+**Effective Pod request:**
+- Regular containers:
+  - Pod request = **sum** of all regular container requests
+- Init containers:
+  - Pod request = **max(highest init-container request, sum of regular container requests)** for each resource
+
+**QoS classes:**
+- `BestEffort`
+  - no requests
+  - no limits
+  - scheduler effectively sees `0` CPU / `0` memory request
+- `Burstable`
+  - at least one request or limit set
+  - but not all CPU+memory request/limit pairs are equal
+- `Guaranteed`
+  - every container has CPU and memory requests
+  - every container has CPU and memory limits
+  - each request equals its corresponding limit
+
+**Important subtlety:**
+- If CPU/memory `limits` are set and `requests` are omitted, the created Pod may end up with:
+  - `requests == limits`
+- Do not guess from the YAML you wrote; inspect the created Pod:
+
+```bash
+kubectl describe pod <name> -n <ns>
+kubectl get pod <name> -n <ns> -o yaml
+```
+
+**Pending due to resources — exam flow:**
+```bash
+kubectl describe pod <pending-pod> -n <ns>
+kubectl describe node <node>
+```
+
+Look for:
+- `Insufficient cpu`
+- `Insufficient memory`
+
+Use the node's:
+- `Allocatable`
+- `Allocated resources`
+
+And remember:
+- a Pod with no requests counts as `0` for scheduler placement
+- namespace quota failures show up as `FailedCreate` on the ReplicaSet/Deployment, not as `Pending` Pods
 
 ### Shell Counting Pattern
 

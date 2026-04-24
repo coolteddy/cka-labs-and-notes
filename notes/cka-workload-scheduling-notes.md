@@ -266,16 +266,29 @@ kubectl get nodes -o custom-columns=NAME:.metadata.name,TAINTS:.spec.taints
 - Scheduler uses requests.
 - CPU limits throttle.
 - Memory limits can cause OOM kill.
+- Use node **Allocatable**, not Capacity, for scheduling math.
+- Actual runtime usage is not what the scheduler uses for placement.
+
+Effective Pod request:
+- regular containers: **sum** of container requests
+- init containers: **max(highest init-container request, sum of regular container requests)** for each resource
 
 QoS classes:
 - `BestEffort`: no requests or limits
 - `Burstable`: some requests or limits set, but not all equal
 - `Guaranteed`: every container has CPU and memory requests and limits, and requests equal limits
 
+Important subtlety:
+- If CPU/memory `limits` are set and `requests` are omitted, the created Pod may end up with:
+  - `requests == limits`
+- Always inspect the created Pod, not only the YAML you wrote.
+
 Check with:
 
 ```bash
 kubectl describe pod <pod>
+kubectl get pod <pod> -o yaml
+kubectl describe node <node>
 ```
 
 ## LimitRange and ResourceQuota
@@ -283,6 +296,14 @@ kubectl describe pod <pod>
 - `LimitRange` sets namespace defaults, mins, and maxes for resources.
 - `ResourceQuota` limits total namespace usage.
 - `ResourceQuota` is cumulative, not per pod.
+- Admission failures show up as `FailedCreate` on the ReplicaSet/Deployment.
+- Scheduler failures show up as `Pending` Pods with messages like:
+  - `Insufficient cpu`
+  - `Insufficient memory`
+- Quota shorthand:
+  - `requests.cpu` / `requests.memory` = requests quota
+  - `limits.cpu` / `limits.memory` = limits quota
+  - `cpu` and `memory` are limit-oriented quota keys in practice, not the same as `requests.cpu` / `requests.memory`
 
 Verify:
 
@@ -700,6 +721,8 @@ Vs `RollingUpdate` (default): `Recreate` causes downtime but avoids running two 
 - For Services: check both `svc` and `endpoints`.
 - For Deployments: check `deploy`, `rs`, and `pods`.
 - For rollout problems: use `kubectl describe pod`, `kubectl rollout status`, and `kubectl rollout history`.
+- For Deployment problems: check `deploy`, `rs`, and `pods`, not only `pods`.
+- If old and new ReplicaSet hashes are present at the same time, rollout overlap can hide the true scheduling math.
 - `kubectl rollout undo` is faster than editing YAML when an image update breaks things.
 - `kubectl create job --from=cronjob/<name> <job-name>` triggers a CronJob immediately.
 
@@ -718,4 +741,55 @@ Vs `RollingUpdate` (default): `Recreate` causes downtime but avoids running two 
 | envFrom + invalid key name | Use `env[].valueFrom.configMapKeyRef` for hyphenated keys |
 | Rollout pause forgot to resume | `kubectl rollout resume deployment/<name>` |
 | nodeName bypasses scheduler | Use `nodeSelector` or affinity when testing preemption |
+
+---
+
+## ResourceQuota vs LimitRange
+
+### ResourceQuota
+Caps **total aggregate** consumption across the whole namespace.
+
+```bash
+k create quota rq -n myns --hard=requests.cpu=1000m,requests.memory=1Gi,limits.cpu=2,limits.memory=2Gi
+```
+
+Gotchas:
+- `cpu` shorthand = `requests.cpu` (not limits)
+- If quota exists for cpu/memory, every pod **must** specify requests/limits or it gets rejected
+- Use LimitRange alongside to inject defaults automatically
+
+Common hard fields:
+- `requests.cpu`, `limits.cpu`, `requests.memory`, `limits.memory`
+- `pods`, `services`, `secrets`, `configmaps`, `persistentvolumeclaims`
+- `requests.storage`
+
+Scopes — quota only applies to pods matching the scope:
+- `BestEffort` / `NotBestEffort`
+- `Terminating` / `NotTerminating`
+- `PriorityClass` (via scopeSelector)
+
+```yaml
+scopeSelector:
+  matchExpressions:
+  - operator: In
+    scopeName: PriorityClass
+    values: ["high"]
+```
+
+### LimitRange
+Sets **per-container/pod defaults and min/max bounds**. Namespaced.
+
+| Field | Purpose |
+|---|---|
+| `default` | injected as limits if container doesn't specify |
+| `defaultRequest` | injected as requests if container doesn't specify |
+| `max` | upper bound — pod rejected if exceeded |
+| `min` | lower bound — pod rejected if below |
+
+Types:
+- `Container` — applies per container (supports all 4 fields)
+- `Pod` — applies to sum of all containers in pod (min/max only)
+- `PersistentVolumeClaim` — applies per PVC (min/max only)
+
+Mutation order: defaults injected first → then min/max validation.
 | Inter-pod affinity wrong topologyKey | `kubernetes.io/hostname` = node, `topology.kubernetes.io/zone` = zone |

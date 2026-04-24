@@ -90,12 +90,29 @@ Selector behavior:
 - `namespaceSelector` matches namespaces by label
 - `ipBlock` matches CIDRs
 
+Cross-namespace trap:
+
+- `podSelector` alone never means "any namespace"
+- to match Pods in another namespace, combine:
+  - `namespaceSelector`
+  - and `podSelector`
+
 Logic:
 
 - `from` and `ports` in the same ingress rule are `AND`
 - multiple entries under `from` are `OR`
 - multiple entries under `ports` are `OR`
 - multiple ingress rules are `OR`
+
+AND vs OR trap:
+
+- same `from` item with both `namespaceSelector` and `podSelector` = AND
+- separate `from` items = OR
+
+Ports note:
+
+- ingress `ports` means destination ports on the selected Pod
+- source/client port can be any ephemeral port
 
 Useful checks:
 
@@ -109,6 +126,15 @@ Failure hints:
 
 - timeout often suggests `NetworkPolicy`, routing, or unreachable backend
 - `connection refused` often suggests wrong `targetPort` or app not listening
+
+Lab reality note:
+
+- NetworkPolicy YAML can be correct even if traffic is not blocked in a lab cluster.
+- If the cluster does not have a policy-capable CNI (for example Calico, Cilium, or kube-router), NetworkPolicy objects may not be enforced.
+- In that case, still practice:
+  - YAML shape
+  - least-privilege reasoning
+  - selector logic
 
 ## Ingress
 

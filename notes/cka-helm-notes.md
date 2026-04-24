@@ -192,6 +192,40 @@ Expected CRD-free proof:
 - no matching output from `grep -n`
 - count `0` from `grep -c`
 
+Argo CD exam-style flow when CRDs already exist:
+
+```bash
+helm repo add argo https://argoproj.github.io/argo-helm
+helm repo update
+helm search repo argo/argo-cd --versions
+helm show chart argo/argo-cd --version 7.7.3
+```
+
+Important:
+
+- chart version and app version are different things
+- for example:
+  - chart: `7.7.3`
+  - app: `v2.13.0`
+
+If you must render to a file and install only the non-CRD resources:
+
+```bash
+helm template argocd argo/argo-cd \
+  --namespace argocd \
+  --version 7.7.3 \
+  --set crds.install=false \
+  > argocd-rendered.yaml
+
+kubectl apply -f argocd-rendered.yaml
+```
+
+If you need the Argo CD CRDs first for a local simulation, install them from upstream version-pinned manifests using the **app version**:
+
+```bash
+kubectl apply -k "https://github.com/argoproj/argo-cd/manifests/crds?ref=v2.13.0"
+```
+
 ## CRD Handling
 
 - CRDs are cluster-scoped resources.
@@ -217,6 +251,13 @@ Important distinction:
   - prefer the chart's own CRD control value if it exists
   - use `--skip-crds` as a fallback when the chart does not expose a value
 
+Argo CD specific note:
+
+- For `argo/argo-cd`, `helm show crds` may return nothing useful because the chart does not expose CRDs via the normal Helm `crds/` directory path.
+- In that case:
+  - install CRDs separately from upstream Argo CD manifests
+  - then render/apply the chart with `--set crds.install=false`
+
 ## Gotchas
 
 - `helm repo add` does not download the whole repo. It stores repo config locally.
@@ -231,6 +272,10 @@ Important distinction:
 - If the chart exposes a CRD value, prefer that over the generic Helm flag.
 - `helm template` does not need the namespace to already exist.
 - Redirecting to `/home/file.yaml` can fail for a normal user. Use `~/file.yaml` or `/home/<user>/file.yaml`.
+- `helm pull <repo/chart>` downloads the chart artifact locally, not the whole Git repository.
+- By default `helm pull` creates a `.tgz` file.
+- Use `helm pull <repo/chart> --untar` to unpack the chart directory locally.
+- `<repo_alias>/<chart>` syntax only works after the repo alias has been added with `helm repo add`.
 
 ## Useful Local Paths
 
