@@ -2369,6 +2369,61 @@ kubectl get pods -A
 - `cpu` shorthand in quota = `requests.cpu`
 - Always pair ResourceQuota with LimitRange so pods without requests/limits get defaults injected
 
+**ResourceQuota example:**
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: rq
+  namespace: demo
+spec:
+  hard:
+    requests.cpu: "1000m"
+    requests.memory: 1Gi
+    limits.cpu: "2"
+    limits.memory: 2Gi
+```
+
+Meaning:
+- total requested CPU in the namespace cannot exceed `1000m`
+- total requested memory cannot exceed `1Gi`
+- total limits CPU cannot exceed `2`
+- total limits memory cannot exceed `2Gi`
+
+**LimitRange example:**
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: defaults
+  namespace: demo
+spec:
+  limits:
+  - type: Container
+    defaultRequest:
+      cpu: 200m
+      memory: 128Mi
+    default:
+      cpu: 500m
+      memory: 256Mi
+    min:
+      cpu: 100m
+      memory: 64Mi
+    max:
+      cpu: "1"
+      memory: 512Mi
+```
+
+Meaning:
+- omitted requests get defaulted to `200m / 128Mi`
+- omitted limits get defaulted to `500m / 256Mi`
+- Pods are rejected if below `min`
+- Pods are rejected if above `max`
+
+**Quick memory:**
+- `ResourceQuota` = namespace budget
+- `LimitRange` = per-object defaults and bounds
+
 ### Requests, Limits, QoS, and Scheduling
 
 **Scheduling rules:**
@@ -2396,6 +2451,14 @@ kubectl get pods -A
   - every container has CPU and memory requests
   - every container has CPU and memory limits
   - each request equals its corresponding limit
+
+**Eviction tendency under node resource pressure:**
+- `BestEffort` Pods are the easiest to evict
+- `Burstable` Pods are in the middle
+- `Guaranteed` Pods are the hardest to evict
+- exam-safe memory:
+  - `BestEffort` first
+  - `Guaranteed` last
 
 **Important subtlety:**
 - If CPU/memory `limits` are set and `requests` are omitted, the created Pod may end up with:
