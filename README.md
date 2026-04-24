@@ -50,7 +50,14 @@ Open the repo and work through the notes and exercises by topic. For realistic p
 
 Current note sets:
 
-- [notes/cka-shell-vi-tips.md](notes/cka-shell-vi-tips.md)
-- [notes/cka-workload-scheduling-notes.md](notes/cka-workload-scheduling-notes.md)
-- [notes/cka-storage-notes.md](notes/cka-storage-notes.md)
+- [notes/README.md](notes/README.md)
+- [notes/cka-cluster-architecture-cheatsheet.md](notes/cka-cluster-architecture-cheatsheet.md)
+- [notes/cka-cluster-installation-cheatsheet.md](notes/cka-cluster-installation-cheatsheet.md)
+- [notes/cka-helm-notes.md](notes/cka-helm-notes.md)
+- [notes/cka-mix-and-match-cheatsheet.md](notes/cka-mix-and-match-cheatsheet.md)
+- [notes/cka-networking-cheatsheet.md](notes/cka-networking-cheatsheet.md)
 - [notes/cka-networking-notes.md](notes/cka-networking-notes.md)
+- [notes/cka-shell-vi-tips.md](notes/cka-shell-vi-tips.md)
+- [notes/cka-storage-notes.md](notes/cka-storage-notes.md)
+- [notes/cka-troubleshooting-cheatsheet.md](notes/cka-troubleshooting-cheatsheet.md)
+- [notes/cka-workload-scheduling-notes.md](notes/cka-workload-scheduling-notes.md)
