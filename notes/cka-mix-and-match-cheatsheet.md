@@ -565,6 +565,50 @@ spec:
 - `matchLabels` = simple `key: value`
 - `matchExpressions` = `key`, `operator`, optional/required `values`
 
+**Selector shape memory:**
+- Plain map shape:
+  - `nodeSelector`
+  - Service `selector`
+  ```yaml
+  nodeSelector:
+    disktype: ssd
+
+  selector:
+    app: web
+  ```
+- Selector object shape:
+  - Deployment `spec.selector`
+  - NetworkPolicy `podSelector`
+  - affinity `labelSelector`
+  ```yaml
+  selector:
+    matchLabels:
+      app: web
+
+  podSelector:
+    matchLabels:
+      app: backend
+
+  labelSelector:
+    matchLabels:
+      tier: critical
+  ```
+- Complex expression shape:
+  - `nodeAffinity`
+  ```yaml
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: node-role.kubernetes.io/control-plane
+          operator: DoesNotExist
+  ```
+
+**Affinity term reminder:**
+- `nodeAffinity.required...` needs `nodeSelectorTerms`
+- `podAffinity.required...` is a list of terms directly
+- `podAntiAffinity.required...` is a list of terms directly
+
 **Operator rule:**
 - `In`, `NotIn`, `Gt`, `Lt` -> use `values`
 - `Exists`, `DoesNotExist` -> do not use `values`
