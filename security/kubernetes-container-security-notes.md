@@ -482,3 +482,110 @@ Interview-ready answer:
 A concise answer could be:
 
 > I would assume a compromised application can execute within its container and design controls to stop the attack progressing. I would run it as a non-root UID, disable privilege escalation, drop all capabilities, use a read-only root filesystem, avoid privileged mode and host mounts, and give it a dedicated least-privilege ServiceAccount without an API token unless required. I would deploy an approved image by digest so the running artifact is the one CI scanned and authorized. These preventive controls would be backed by audit logging, runtime detection, network policy, and an incident response process.
+
+## Whiteboard interview quick reference
+
+### Identity
+
+```text
+Human access      = SSO/MFA + group-based RBAC
+Kubernetes access = ServiceAccount + RBAC
+Cloud access      = workload identity + cloud IAM
+```
+
+- Prefer short-lived credentials and dedicated workload identities.
+- Disable ServiceAccount token automount when Kubernetes API access is not needed.
+- Use just-in-time elevation and audited break-glass access for administrators.
+
+### TLS and cryptography
+
+```text
+TLS   = server identity + encrypted connection
+mTLS  = both client and server authenticate
+CA    = establishes which certificates are trusted
+```
+
+- Automate certificate issuance, expiry monitoring and rotation.
+- Use overlapping trust during CA rotation to avoid outages.
+- Separate trust roots or encryption keys when tenant risk requires it.
+
+```text
+Base64          = encoding only
+API encryption  = API server encrypts data before etcd
+etcd            = stores the ciphertext
+KMS             = manages and protects the key-encryption key
+HSM             = protects key material in hardware
+```
+
+### Multi-tenancy
+
+```text
+Namespace = logical boundary
+Node pool = workload/host boundary
+Cluster   = control-plane and failure boundary
+```
+
+- Namespaces require RBAC, NetworkPolicy, Pod Security, quotas and dedicated identities.
+- Use dedicated nodes for host or compliance isolation.
+- Use separate clusters for hostile tenants, different administrators, security classifications or stronger blast-radius requirements.
+
+```text
+Taint      = keep ordinary workloads out
+Toleration = permit an approved workload onto the node
+Affinity   = require that workload to remain on the intended nodes
+Admission  = enforce the namespace-to-node rule
+```
+
+### Software supply chain
+
+```text
+Developer → Git → PR → CI → Build → Registry → Admission → Kubernetes
+```
+
+- Protect pipeline changes and separate untrusted PR tests from release builds.
+- Use isolated disposable builders with temporary least-privilege credentials.
+- Generate an SBOM, scan the image, record provenance and sign the immutable digest.
+- Store artifacts in a trusted registry and reject unapproved images at admission.
+- Rebuild, rescan and redeploy when vulnerabilities are discovered later.
+
+```text
+SBOM       = what is inside?
+Provenance = where did it come from and how was it built?
+Signature  = who vouches for this exact digest?
+```
+
+### Monitoring
+
+```text
+Application = how entry happened
+Runtime     = what executed
+Audit       = what the Kubernetes identity did
+Network     = where the attacker moved
+Node        = whether container isolation was crossed
+SIEM        = correlates the evidence
+```
+
+Audit events should be assessed using identity, source IP, user agent, verb, resource, namespace, response code and timestamp.
+
+Suspicious activity includes Secret reads, `pods/exec`, privileged Pod creation, RBAC changes, unusual cross-namespace access and repeated authorization failures.
+
+### Incident response
+
+```text
+Validate
+→ establish timeline and blast radius
+→ contain workload, identity and network
+→ preserve evidence
+→ rotate exposed credentials
+→ investigate lateral movement and node impact
+→ rebuild from a trusted image
+→ remediate and verify controls
+```
+
+- Out-of-band telemetry comes from trusted systems outside the compromised container.
+- Cordoning prevents new scheduling; it does not isolate existing workloads.
+- Quarantining restricts communication while preserving controlled forensic access.
+- Do not clean a compromised container in place.
+- Preserve Kubernetes state, logs, runtime evidence and storage snapshots as appropriate.
+- Deployment replacement removes ephemeral state but not the original vulnerability.
+- StatefulSet recreation may reattach a compromised PVC, so data integrity must be assessed.
