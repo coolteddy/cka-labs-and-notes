@@ -589,3 +589,120 @@ Validate
 - Preserve Kubernetes state, logs, runtime evidence and storage snapshots as appropriate.
 - Deployment replacement removes ephemeral state but not the original vulnerability.
 - StatefulSet recreation may reattach a compromised PVC, so data integrity must be assessed.
+
+## Supply-chain incident scenario
+
+### Situation
+
+A production workload uses:
+
+```text
+public-registry.example/payment-api:latest
+```
+
+New Pods begin making unexpected outbound connections.
+
+Possible causes:
+
+- Source or dependency compromise
+- Malicious pipeline change
+- Compromised build worker
+- Stolen registry credential
+- Mutable tag replaced with different content
+- Vulnerability discovered after the original scan
+
+### Investigate
+
+Trace the running artifact backwards:
+
+```text
+Running image digest
+→ registry audit records
+→ signature and provenance
+→ CI build
+→ source commit
+→ SBOM
+```
+
+Collect:
+
+- Declared image and resolved digest
+- Registry push/pull events
+- CI and deployment records
+- Source and pipeline changes
+- Signature and provenance verification
+- Runtime processes and network activity
+- Every workload running the affected digest
+
+### Prevent
+
+```text
+Git:
+MFA + protected branches + reviewed pipeline changes
+
+CI:
+isolated disposable builders + temporary least-privilege credentials
+
+Build:
+minimal image + SBOM + scanning + provenance + signed digest
+
+Registry:
+approved private registry + immutable tags + RBAC + audit logs
+
+Admission:
+verify registry + digest + signature + provenance + workload policy
+```
+
+### Detect
+
+- Unexpected registry pushes or tag changes
+- Pipeline changes and builds from unapproved branches
+- Signature, provenance or admission failures
+- New vulnerabilities matched against deployed SBOMs
+- Unexpected runtime processes or network connections
+- Differences between declared and running image digests
+
+### Respond
+
+```text
+Block affected digest
+→ stop further rollout
+→ isolate affected workloads
+→ identify every deployment using it
+→ preserve CI, registry and runtime evidence
+→ rotate affected credentials or signing keys
+→ rebuild in a clean trusted builder
+→ scan, sign and deploy a new digest
+→ investigate data access and verify recovery
+```
+
+### Vulnerability discovered after deployment
+
+```text
+New CVE
+→ search SBOM inventory
+→ identify affected deployed digests
+→ assess reachability and exploitability
+→ patch and rebuild
+→ rescan and sign
+→ deploy new digest
+→ retire or block old digest
+```
+
+### Air-gapped import
+
+```text
+External artifact
+→ verify source, SBOM, signature and provenance
+→ scan
+→ controlled transfer across boundary
+→ import into internal registry
+→ scan and verify again
+→ admission-controlled deployment
+```
+
+Vulnerability databases and security updates also require a controlled offline import process.
+
+### Interview answer
+
+> I would trace the running digest through the registry, build provenance and source commit rather than trust its tag. I would protect pipeline changes, build in isolated workers with temporary credentials, and produce an SBOM, scan result, provenance and signature for the immutable digest. Admission would allow only trusted, verified images. If trust were lost, I would block the digest, identify affected workloads, rotate credentials, rebuild through a clean pipeline and deploy a newly signed digest.
