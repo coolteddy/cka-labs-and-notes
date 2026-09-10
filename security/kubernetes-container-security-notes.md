@@ -706,3 +706,85 @@ Vulnerability databases and security updates also require a controlled offline i
 ### Interview answer
 
 > I would trace the running digest through the registry, build provenance and source commit rather than trust its tag. I would protect pipeline changes, build in isolated workers with temporary credentials, and produce an SBOM, scan result, provenance and signature for the immutable digest. Admission would allow only trusted, verified images. If trust were lost, I would block the digest, identify affected workloads, rotate credentials, rebuild through a clean pipeline and deploy a newly signed digest.
+
+## Privileged-container demonstration
+
+The same BusyBox image behaved differently depending on runtime privileges.
+
+```text
+Privileged Pod:
+UID 0
+CapEff: 000001ffffffffff
+tmpfs mount succeeded
+
+Normal Pod:
+UID 0
+CapEff: 00000000a80425fb
+tmpfs mount failed with permission denied
+```
+
+This demonstrates:
+
+- Root inside a container does not automatically possess every capability.
+- Privileged mode grants broad capabilities, including `SYS_ADMIN`.
+- `SYS_ADMIN` permits powerful operations such as mounting filesystems.
+- The tmpfs test used the container's mount namespace; it did not mount node data.
+
+```text
+privileged → broad kernel/device powers
+hostPath   → node filesystem exposure
+root       → broad filesystem permissions
+```
+
+The combination creates a serious node-compromise path.
+
+## Built-in versus custom admission policy
+
+Pod Security Admission with `baseline` or `restricted` can reject `hostPath` volumes during Pod creation.
+
+```text
+Pod with hostPath
+→ API admission
+→ Pod Security violation
+→ Forbidden
+→ Pod is not stored or scheduled
+```
+
+The built-in Pod Security Standards do not require:
+
+```yaml
+readOnlyRootFilesystem: true
+```
+
+Enforce that organisational requirement using:
+
+- Kubernetes `ValidatingAdmissionPolicy` with CEL
+- Kyverno
+- OPA Gatekeeper
+- A custom validating admission webhook
+
+Admission validation is synchronous:
+
+```text
+create/update request
+→ evaluate policy
+→ allow or reject
+→ store only if allowed
+```
+
+Adding a policy does not automatically delete existing non-compliant Pods. Adopt safely through:
+
+```text
+audit existing workloads
+→ warn
+→ remediate
+→ enforce
+```
+
+Mental model:
+
+```text
+hostPath               → built-in Pod Security can reject
+readOnlyRootFilesystem → custom admission policy required
+existing violations    → background audit/reporting required
+```
