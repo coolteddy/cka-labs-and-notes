@@ -483,7 +483,38 @@ A concise answer could be:
 
 > I would assume a compromised application can execute within its container and design controls to stop the attack progressing. I would run it as a non-root UID, disable privilege escalation, drop all capabilities, use a read-only root filesystem, avoid privileged mode and host mounts, and give it a dedicated least-privilege ServiceAccount without an API token unless required. I would deploy an approved image by digest so the running artifact is the one CI scanned and authorized. These preventive controls would be backed by audit logging, runtime detection, network policy, and an incident response process.
 
-## Whiteboard interview quick reference
+## Final Security recap
+
+### Security assessment approach
+
+Before choosing controls, clarify:
+
+- Workloads and exposed entry points
+- Data sensitivity
+- Tenants and administrators
+- Connectivity requirements
+- Trust and compliance boundaries
+
+Use this structure:
+
+```text
+Threat
+→ Prevent
+→ Detect
+→ Respond
+→ Explain blast radius
+```
+
+Assume that an individual container may eventually be compromised, and design the platform so that compromise remains contained.
+
+### Workload controls
+
+- Run containers as non-root and non-privileged.
+- Disable privilege escalation.
+- Drop all capabilities and add back only demonstrated requirements.
+- Use a read-only root filesystem.
+- Avoid `hostPath` and host namespaces.
+- Enforce Pod Security plus additional organisational admission policies.
 
 ### Identity
 
@@ -589,6 +620,23 @@ Validate
 - Preserve Kubernetes state, logs, runtime evidence and storage snapshots as appropriate.
 - Deployment replacement removes ephemeral state but not the original vulnerability.
 - StatefulSet recreation may reattach a compromised PVC, so data integrity must be assessed.
+
+### Important distinctions
+
+- Root is not the same as privileged.
+- `privileged: false` preserves the normal container sandbox.
+- Dropping capabilities removes powers held now.
+- Disabling privilege escalation prevents gaining powers later.
+- A read-only root filesystem does not make mounted volumes read-only.
+- Cordoning stops new scheduling; it does not quarantine a node.
+- Namespaces do not automatically provide network or hard security isolation.
+- Encryption does not replace RBAC.
+- A signed image is not automatically vulnerability-free.
+- A recreated StatefulSet Pod may reattach compromised persistent data.
+
+### Final summary
+
+> My goal is not to claim that compromise is impossible. I design the platform so one compromised container has minimal identity, network reach and host access; so suspicious behaviour is visible across application, runtime, audit, network and node telemetry; and so we can contain, investigate and recover through a trusted, repeatable process.
 
 ## Supply-chain incident scenario
 
